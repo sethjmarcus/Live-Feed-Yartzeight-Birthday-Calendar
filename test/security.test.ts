@@ -110,7 +110,7 @@ describe('S4 — feed and invite tokens are not stored in plain text', () => {
     try {
       const c = await env.client();
       await c.post('/api/setup', { ...ADMIN, setupCode: env.setupCode! });
-      const created = await c.post('/api/users', { displayName: 'Guest', username: 'guest', permissions: ['subscribe'] });
+      const created = await c.post('/api/users', { displayName: 'Guest', username: 'guest', calendarId: 1, permissions: ['subscribe'] });
       const guest = (await env.repos.users.findById(created.body.user.id))!;
       expect(guest.inviteToken).toBeTruthy();
 

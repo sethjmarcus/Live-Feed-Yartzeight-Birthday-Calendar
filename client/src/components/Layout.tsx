@@ -30,11 +30,11 @@ export function ToastProvider({ children }: { children: ReactNode }) {
 
 // ---------------------------------------------------------------- layout
 export function Layout({ bare = false }: { bare?: boolean }) {
-  const { user, session, can } = useSession();
+  const { user, session, can, isAppAdmin } = useSession();
   const refresh = useRefreshSession();
   const navigate = useNavigate();
-  const calendarName = session?.calendarName ?? 'Calendar';
-  useEffect(() => { document.title = calendarName; }, [calendarName]);
+  const siteName = session?.siteName ?? 'Calendar';
+  useEffect(() => { document.title = siteName; }, [siteName]);
 
   const signOut = useCallback(async () => {
     await api.post('/api/logout');
@@ -46,16 +46,17 @@ export function Layout({ bare = false }: { bare?: boolean }) {
     ['/', 'Upcoming', can('view')],
     ['/events', 'All events', can('view')],
     ['/events/new', '+ Add', can('add')],
-    ['/subscribe', 'Subscribe', can('subscribe')],
-    ['/admin/users', 'Users', can('admin')],
-    ['/admin/activity', 'Activity', can('admin')],
-    ['/admin/settings', 'Settings', can('admin')],
+    ['/subscribe', 'Subscribe', !!user?.memberships.length],
+    ['/calendars', 'Calendars', isAppAdmin || can('manage') || (user?.calendars.length ?? 0) > 1],
+    ['/admin/users', 'People', isAppAdmin],
+    ['/admin/activity', 'Activity', isAppAdmin || can('manage')],
+    ['/admin/settings', 'Settings', isAppAdmin],
   ];
 
   return (
     <>
       <header className="top">
-        <Link className="brand" to="/"><img src="/icon.svg" alt="" width={28} height={28} /><span>{calendarName}</span></Link>
+        <Link className="brand" to="/"><img src="/icon.svg" alt="" width={28} height={28} /><span>{siteName}</span></Link>
         {user && !bare && (
           <>
             <nav className="nav">
@@ -77,14 +78,17 @@ export function Layout({ bare = false }: { bare?: boolean }) {
 }
 
 // ---------------------------------------------------------------- guards
-/** Renders children only for a signed-in user (with an optional permission). */
-export function RequireUser({ perm, children }: { perm?: Permission; children: ReactNode }) {
-  const { user, session, isPending, can } = useSession();
+/**
+ * Renders children only for a signed-in user — optionally one holding a permission in at
+ * least one calendar, or an app admin. (The server checks the specific calendar.)
+ */
+export function RequireUser({ perm, children }: { perm?: Permission | 'appAdmin'; children: ReactNode }) {
+  const { user, session, isPending, can, isAppAdmin } = useSession();
   const location = useLocation();
   if (isPending) return <Loading />;
   if (session?.needsSetup) return <Navigate to="/setup" replace />;
   if (!user) return <Navigate to={`/login?next=${encodeURIComponent(location.pathname + location.search)}`} replace />;
-  if (perm && !can(perm)) {
+  if (perm && !(perm === 'appAdmin' ? isAppAdmin : can(perm))) {
     return (
       <section className="card narrow-card">
         <h1>Not allowed</h1>

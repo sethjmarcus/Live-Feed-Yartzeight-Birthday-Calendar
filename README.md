@@ -5,8 +5,9 @@ A self-hosted web app for a shared calendar of **birthdays, anniversaries, yahrz
 - **Hebrew dates by [Hebcal](https://www.hebcal.com/):** conversions, yahrzeit rules (Adar I and II, 30 Cheshvan and Kislev) and Hebrew lettering.
 - **Optional Jewish holidays and candle-lighting times** from the Hebcal API. Each subscriber opts in, and holidays still work offline.
 - **Enter dates the way you know them:** an English date (with an "after sunset" box) or a Hebrew date, with a live conversion as you type. Each event repeats on the Hebrew date, the English date, or both.
-- **Permissions:** the admin gives each user Subscribe, View, Add, Edit own or any, Delete own or any, and Admin.
-- **Accountability:** the admin sees who added and who edited each event, the full change history, and an activity log. Deleted events can be restored.
+- **Several calendars** (e.g. each side of the family). Each has its own members, and each member has a role in it: Subscriber, Viewer, Contributor, Editor or Owner, or custom permissions.
+- **One phone setup per person.** Their feed holds every calendar they subscribe to, so a calendar they join later just appears.
+- **Accountability:** owners see who added and edited each event, the full change history, and an activity log. Deleted events can be restored.
 - **Stack:** Express API and React front end, TypeScript throughout, SQLite storage. See [ARCHITECTURE.md](ARCHITECTURE.md).
 
 ---
@@ -23,13 +24,16 @@ cp .env.example .env # optional; see "Server address"
 npm start
 ```
 
-Open **http://localhost:8080**. The first visit creates the admin account. It asks for a **setup code**, which the server prints in its log when it starts (e.g. `First-run setup code: A1B2C3-D4E5F6`). This stops anyone else on the network from claiming the admin account first.
+Open **http://localhost:8080**. The first visit creates the admin account and your first calendar. It asks for a **setup code**, which the server prints in its log when it starts (e.g. `First-run setup code: A1B2C3-D4E5F6`). This stops anyone else on the network from claiming the admin account first.
 
 **Developing:** `npm run dev` runs the server with the React app hot-reloading, on one port. `npm test` runs the tests, and `npm run typecheck` checks the types.
 
 **Upgrading from earlier versions:** your data carries over automatically.
 - **Version 1:** `data/db.json` is imported on first start and renamed `db.json.imported`. Users, passwords, events, history and feed links are all kept.
-- **Version 2:** `data/calendar.sqlite` is used as-is.
+- **Version 2 and single-calendar version 3:** `data/calendar.sqlite` is upgraded in place.
+  - Everything becomes your first calendar, and everyone keeps exactly the permissions they had.
+  - Admins become that calendar's owners, and app admins.
+  - Feed links keep working. A backup is taken daily, but copying `data/` before upgrading never hurts.
 
 ## 2. Server address (important for phones)
 
@@ -58,13 +62,38 @@ After pulling updates, run `npm install && npm run build`, then `systemctl --use
 
 You can also run it with Docker: `docker compose up -d --build`.
 
-## 4. Invite people (admin)
+## 4. Calendars and people
 
-1. Go to **Users → + Invite someone** and pick a preset: Subscriber, Viewer, Contributor, Editor or Admin. You can then adjust individual permissions.
+**Calendars** (app admin): create one per group, for example "Cohen side" and "Levi side". You become its owner.
+
+**Roles** are set per calendar:
+
+| Role | Can |
+|---|---|
+| Subscriber | Get the calendar on their phone |
+| Viewer | + browse events in the app |
+| Contributor | + add events, and edit or delete their own |
+| Editor | + edit or delete anyone's events |
+| Owner | + manage members and roles, see the activity log, restore deleted events |
+
+Choose **Custom…** to tick individual permissions instead.
+
+**Inviting someone:**
+1. Use **Calendars → Manage → Invite someone new**, or **People → + Invite someone**.
 2. Send them the **setup link** (copy it, or use the WhatsApp button). It works once and lasts 14 days.
 3. They choose a password and land on **Subscribe**, which has one-tap buttons for their phone.
 
-For someone who only needs the calendar, send the **subscribe page link** from their user page instead. It needs no password.
+To add someone who already has an account to another calendar, use the calendar's page or theirs.
+
+For someone who only needs the calendar, send the **subscribe page link** from their page under People instead. It needs no password.
+
+**Owners** of a calendar can invite people to it and manage its members without being app admins.
+
+**App admins** manage accounts, calendars, settings and backups. What they see of other people's calendars depends on `APP_ADMIN_ACCESS` in `.env`:
+- `full` (default): they can open and manage every calendar. This suits one family.
+- `metadata`: they see only each calendar's name and number of members and events. This suits unrelated families sharing one server.
+
+Whoever runs the server can always read the database itself.
 
 ## 5. On the phone (one time)
 
@@ -72,7 +101,7 @@ For someone who only needs the calendar, send the **subscribe page link** from t
 - **Android with Google Calendar:** tap **Add to Google Calendar**, then *Add*. This needs a public HTTPS address.
 - **Android with ICSx⁵:** install the free ICSx⁵ app, tap the webcal link, and set sync to hourly. This also works on a home-network address.
 
-Each person chooses what their feed includes and when to be reminded. The **Users** page shows when each phone last synced.
+Each person chooses what their feed includes (which calendars and event types) and when to be reminded. The **People** page shows when each phone last synced.
 
 ## 6. Holidays & candle-lighting
 

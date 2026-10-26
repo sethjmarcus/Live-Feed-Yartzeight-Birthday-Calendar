@@ -4,26 +4,25 @@
  */
 import type { ErrorRequestHandler, Request, RequestHandler } from 'express';
 import type { ZodType } from 'zod';
-import { can, type Permission } from '../../shared/permissions.js';
+import { isAppAdmin } from '../../shared/permissions.js';
 import { fieldErrors } from '../../shared/schemas.js';
-import type { User } from '../features/users/userRepository.js';
-import type { UserRepository } from '../features/users/userRepository.js';
+import type { Actor, User, UserRepository } from '../features/users/userRepository.js';
 import { ForbiddenError, HttpError, UnauthorizedError, ValidationError } from './errors.js';
 
 declare module 'express-serve-static-core' {
   interface Request {
-    user?: User | null;
+    user?: Actor | null;
   }
 }
 
 /** Attach req.user from the session (if the session is still valid for that user). */
-export function loadUser(users: UserRepository): RequestHandler {
+export function loadUser(users: UserRepository, toActor: (u: User) => Promise<Actor>): RequestHandler {
   return async (req, _res, next) => {
     req.user = null;
     const { uid, sv } = req.session ?? {};
     if (uid) {
       const user = await users.findById(uid);
-      if (user && user.active && user.sessionVersion === sv) req.user = user;
+      if (user && user.active && user.sessionVersion === sv) req.user = await toActor(user);
     }
     next();
   };
@@ -38,16 +37,26 @@ export function signOut(req: Request) {
 }
 
 /** The signed-in user, or a 401. */
-export function currentUser(req: Request): User {
+export function currentUser(req: Request): Actor {
   if (!req.user) throw new UnauthorizedError();
   return req.user;
 }
 
-/** Route guard: signed in, and optionally holding a permission. */
-export function requireUser(perm?: Permission): RequestHandler {
+/**
+ * Route guard: signed in. Permissions that depend on a calendar are checked by the
+ * services, which know which calendar a request is about.
+ */
+export function requireUser(): RequestHandler {
   return (req, _res, next) => {
-    const user = currentUser(req);
-    if (perm && !can(user, perm)) throw new ForbiddenError();
+    currentUser(req);
+    next();
+  };
+}
+
+/** Route guard: signed in as an app admin. */
+export function requireAppAdmin(): RequestHandler {
+  return (req, _res, next) => {
+    if (!isAppAdmin(currentUser(req))) throw new ForbiddenError();
     next();
   };
 }

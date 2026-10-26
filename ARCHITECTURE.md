@@ -19,7 +19,7 @@ shared/                      Used by BOTH server and browser
   hebrewCalendar.ts          Adapter over @hebcal/hdate (the only file importing it)
   eventTypes.ts              Strategy objects: birthday / anniversary / yahrzeit / other
   occurrences.ts             When each event falls, and what its calendar entry says
-  permissions.ts             Permission list, presets, can()/canEditEvent() policy
+  permissions.ts             Permissions, roles, per-calendar can()/canEditEvent() policy, resolveAccess()
   schemas.ts                 Zod schemas for every form/request (validated on both sides)
   api.ts                     JSON shapes exchanged with the browser
 
@@ -31,8 +31,9 @@ server/
   http/                      Security (helmet, sessions, CSRF, rate limits), guards, errors
   features/                  One folder per feature:
     auth/                      session, setup, sign-in, invites
+    calendars/                 repository · service · routes (calendars and their members)
     events/                    repository · service · routes
-    users/                     repository · service · routes (own account + admin)
+    users/                     repository · service · routes (own account + accounts)
     feed/                      .ics builder (ical-generator) · upcoming list · public routes
     hebcal/                    Hebcal REST API gateway + cache (+ offline fallback)
     settings/                  settings, activity log, backups
@@ -44,7 +45,7 @@ client/src/
   components/                Layout, guards, toast, small UI pieces
   pages/                     One file per page (or page group)
 
-test/                        Vitest: shared core + API end-to-end (fake Hebcal, v1 import)
+test/                        Vitest: shared core, API end-to-end, calendars, security, upgrades
 ```
 
 ## Patterns, and why
@@ -61,7 +62,25 @@ test/                        Vitest: shared core + API end-to-end (fake Hebcal, 
 | **Service layer** | `features/*/…Service.ts` | Each use case validates, checks permissions, persists and audits in one place. Routes stay a few lines each. |
 | **Composition root / DI** | `server/app.ts` | Objects are created once and passed in. Tests build the same graph with a fake Hebcal API and a temp folder. |
 | **Middleware pipeline** | `server/http/` | Security headers, sessions, CSRF, auth guards and error handling are separate steps. |
+| **Policy object** | `shared/permissions.ts` | Who may do what is decided in one place, by pure functions. The server enforces them; the browser uses the same functions to show or hide buttons. |
 | **Audit log** | `audit_log` table | Every change records who did it, when, and a field-by-field diff. This powers "Added by", history and the activity page. |
+
+## Calendars and who sees what
+
+```
+users ──< calendar_members >── calendars ──< events
+           (permissions, in_feed)
+```
+
+- **Per calendar:** each person has a set of permissions in each calendar they belong to, normally one of the roles Subscriber, Viewer, Contributor, Editor or Owner. "Manage" (Owner) covers members, roles, the calendar's activity log and restoring deleted events.
+- **App admin:** a flag on the account. App admins create calendars and accounts, and own settings and backups.
+- **Resolving access:** when a request arrives, `CalendarService.actorFor()` turns the person's memberships into a list of calendars with what they may do in each (`resolveAccess()` in `shared/permissions.ts`). Services check that list for the calendar a request is about.
+- **`APP_ADMIN_ACCESS`:**
+  - `full` (default, one family): app admins manage every calendar.
+  - `metadata` (unrelated families on one server): app admins see only each calendar's name and counts, the activity log of calendars they belong to, and site-wide entries. Calendar owners then can't browse the list of everyone's names.
+  - Either way, whoever runs the server can read the database. That's inherent to feeds being built on the server.
+- **Feeds:** one link per person, built from every calendar they subscribe to (`in_feed`), so a calendar joined later reaches their phone without a new setup.
+- **Activity log:** each entry carries the calendar it belongs to, or none for site-wide entries (accounts, settings). Each viewer sees only the entries their access covers.
 
 ## Libraries
 
@@ -80,7 +99,7 @@ test/                        Vitest: shared core + API end-to-end (fake Hebcal, 
 ## A request, end to end: adding a yahrzeit
 
 1. **Browser preview:** the form validates with `eventInputSchema` (shared). While you type, the Hebrew-to-English preview is computed in the browser by the shared Hebcal adapter.
-2. **Request:** `POST /api/events` goes through helmet, the session, a CSRF check and loading the user, then `requireUser('add')`.
+2. **Request:** `POST /api/events` goes through helmet, the session, a CSRF check, and loading the user with their access to each calendar.
 3. **Validation:** the route parses the body with the same Zod schema.
-4. **Save:** `EventService.create` fills in the other calendar's date (`normalizeEvent`), then writes the event and its audit entry in one Unit-of-Work transaction.
-5. **Feed:** at its next sync, each phone fetches `/feed/<token>.ics`. `FeedService` asks the yahrzeit strategy, which uses Hebcal's yahrzeit rules, for each year's date, and renders the feed with ical-generator.
+4. **Save:** `EventService.create` checks that the person may add to the chosen calendar, and fills in the date in the other calendar system (`normalizeEvent`). It then writes the event and its audit entry in one Unit-of-Work transaction.
+5. **Feed:** at its next sync, each subscriber's phone fetches `/feed/<token>.ics`. `FeedService` collects the events of that person's calendars. It asks the yahrzeit strategy for each year's date, which uses Hebcal's yahrzeit rules, and renders the feed with ical-generator.

@@ -100,4 +100,60 @@ export const migrations: Record<string, Migration> = {
       `);
     },
   },
+  '003_calendars': {
+    // Several calendars, each with its own members and per-member permissions.
+    // Everything that existed before becomes the first calendar; people keep exactly the
+    // permissions they had (global "admin" becomes "manage" in that calendar, plus app admin).
+    async up(db) {
+      await run(db, `
+        CREATE TABLE calendars (
+          id          INTEGER PRIMARY KEY,
+          name        TEXT NOT NULL,
+          created_at  TEXT NOT NULL,
+          created_by  INTEGER REFERENCES users(id)
+        );
+        CREATE TABLE calendar_members (
+          calendar_id INTEGER NOT NULL REFERENCES calendars(id) ON DELETE CASCADE,
+          user_id     INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+          permissions TEXT NOT NULL DEFAULT '[]',
+          in_feed     INTEGER NOT NULL DEFAULT 1,
+          added_at    TEXT NOT NULL,
+          added_by    INTEGER REFERENCES users(id),
+          PRIMARY KEY (calendar_id, user_id)
+        );
+        CREATE INDEX calendar_members_user ON calendar_members(user_id);
+        ALTER TABLE users ADD COLUMN app_admin INTEGER NOT NULL DEFAULT 0;
+        ALTER TABLE events ADD COLUMN calendar_id INTEGER REFERENCES calendars(id);
+        ALTER TABLE audit_log ADD COLUMN calendar_id INTEGER REFERENCES calendars(id);
+        CREATE INDEX events_calendar ON events(calendar_id);
+        CREATE INDEX audit_calendar ON audit_log(calendar_id)
+      `);
+
+      const count = async (table: string) =>
+        Number((await sql<{ n: number }>`SELECT count(*) AS n FROM ${sql.table(table)}`.execute(db)).rows[0].n);
+      if ((await count('users')) + (await count('events')) > 0) {
+        const stored = (await sql<{ value: string }>`SELECT value FROM settings WHERE key = 'calendarName'`.execute(db)).rows[0];
+        const name = (stored && JSON.parse(stored.value)) || 'Family Calendar';
+        const owner = (await sql<{ id: number | null }>`SELECT min(user_id) AS id FROM user_permissions WHERE permission = 'admin'`.execute(db)).rows[0]?.id ?? null;
+        await sql`INSERT INTO calendars (id, name, created_at, created_by) VALUES (1, ${name}, ${new Date().toISOString()}, ${owner})`.execute(db);
+        await run(db, `
+          INSERT INTO calendar_members (calendar_id, user_id, permissions, in_feed, added_at)
+            SELECT 1, u.id,
+                   (SELECT json_group_array(CASE p.permission WHEN 'admin' THEN 'manage' ELSE p.permission END)
+                      FROM user_permissions p WHERE p.user_id = u.id),
+                   1, u.created_at
+              FROM users u
+             WHERE EXISTS (SELECT 1 FROM user_permissions p WHERE p.user_id = u.id);
+          UPDATE users SET app_admin = 1 WHERE id IN (SELECT user_id FROM user_permissions WHERE permission = 'admin');
+          UPDATE events SET calendar_id = 1;
+          UPDATE audit_log SET calendar_id = 1 WHERE event_id IS NOT NULL
+        `);
+      }
+      // The old calendar name now names the site (header, combined feeds).
+      await run(db, `
+        UPDATE settings SET key = 'siteName' WHERE key = 'calendarName';
+        DROP TABLE user_permissions
+      `);
+    },
+  },
 };

@@ -3,6 +3,7 @@
  */
 import fs from 'node:fs';
 import path from 'node:path';
+import type { AppAdminAccess } from '../shared/permissions.js';
 
 export interface Config {
   port: number;
@@ -21,6 +22,12 @@ export interface Config {
   hebcalApiBase: string;
   hebcalRefreshHours: number;
   logLevel: string;
+  /**
+   * What app admins see of calendars they aren't members of:
+   * 'full' = manage every calendar (one family); 'metadata' = names and counts only
+   * (several unrelated families on one server).
+   */
+  appAdminAccess: AppAdminAccess;
 }
 
 export function loadConfig(rootDir: string, env: NodeJS.ProcessEnv = process.env): Config {
@@ -36,6 +43,7 @@ export function loadConfig(rootDir: string, env: NodeJS.ProcessEnv = process.env
     hebcalApiBase: (env.HEBCAL_API_BASE || 'https://www.hebcal.com').replace(/\/+$/, ''),
     hebcalRefreshHours: Number(env.HEBCAL_REFRESH_HOURS || 12),
     logLevel: env.LOG_LEVEL || 'info',
+    appAdminAccess: env.APP_ADMIN_ACCESS === 'metadata' ? 'metadata' : 'full',
   };
 }
 

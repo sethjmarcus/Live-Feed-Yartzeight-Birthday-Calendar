@@ -4,11 +4,12 @@ import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { QRCodeSVG } from 'qrcode.react';
 import { api } from '../api';
-import { useSession } from '../session';
+import { subscribable, useSession } from '../session';
 import { useToast } from '../components/Layout';
 import { CopyField, Loading } from '../components/ui';
 import { EVENT_TYPES, EVENT_TYPE_KEYS, HEBCAL_FEED_TYPES } from '../../../shared/eventTypes';
-import { feedPrefsSchema, type FeedPrefs } from '../../../shared/schemas';
+import { feedSettingsSchema, type FeedPrefs } from '../../../shared/schemas';
+import { z } from 'zod';
 import { formatDateTime } from '../../../shared/format';
 import type { FeedLinks, SubscriptionDTO } from '../../../shared/api';
 
@@ -34,7 +35,8 @@ export function SubscribePage() {
     <>
       <section className="card">
         <h1>{isOwn ? 'Add the calendar to your phone' : `Calendar link for ${data.user.displayName}`}</h1>
-        <p>Do this <strong>once</strong>. After that, every event anyone adds or edits shows up automatically on {whose} phone.</p>
+        <p>Do this <strong>once</strong>. After that, every event anyone adds or edits shows up automatically on {whose} phone —
+          including calendars {isOwn ? 'you join' : 'they join'} later.</p>
         {data.links.isLocal && (
           <div className="flash warn">
             <strong>Heads-up:</strong> this server's address is <code>{new URL(data.links.https).origin}</code>, which only works on your home network.
@@ -55,12 +57,16 @@ export function SubscribePage() {
   );
 }
 
+type FeedForm = z.input<typeof feedSettingsSchema>;
+
 function FeedPrefsForm({ data, url, whose }: { data: SubscriptionDTO; url: string; whose: string }) {
   const qc = useQueryClient();
   const toast = useToast();
-  const { register, handleSubmit, formState: { isSubmitting } } = useForm<FeedPrefs>({
-    resolver: zodResolver(feedPrefsSchema),
-    defaultValues: data.user.feedPrefs,
+  const calendars = subscribable(data.user);
+  const { register, handleSubmit, formState: { isSubmitting } } = useForm<FeedForm, unknown, z.output<typeof feedSettingsSchema>>({
+    resolver: zodResolver(feedSettingsSchema),
+    // Checkbox groups hold strings; the schema turns them back into numbers.
+    defaultValues: { ...data.user.feedPrefs, calendars: calendars.filter(m => m.inFeed).map(m => String(m.calendarId)) as unknown as number[] },
   });
   const onSubmit = handleSubmit(async prefs => {
     await api.put(url, prefs);
@@ -71,6 +77,15 @@ function FeedPrefsForm({ data, url, whose }: { data: SubscriptionDTO; url: strin
     <section className="card">
       <h2>What {whose} feed includes</h2>
       <form onSubmit={onSubmit} className="stack">
+        {calendars.length > 1 && (
+          <fieldset>
+            <legend>Calendars</legend>
+            <div className="row wrap">
+              {calendars.map(m => <label key={m.calendarId} className="check"><input type="checkbox" value={m.calendarId} {...register('calendars')} /> {m.calendarName}</label>)}
+            </div>
+          </fieldset>
+        )}
+        {calendars.length === 0 && <p className="small muted">{whose === 'your' ? "You aren't" : "They aren't"} subscribed to any calendar yet, so the feed is empty.</p>}
         <div className="row wrap">
           {EVENT_TYPE_KEYS.map(k => <label key={k} className="check"><input type="checkbox" value={k} {...register('types')} /> {EVENT_TYPES[k].emoji} {EVENT_TYPES[k].label}</label>)}
         </div>
@@ -102,7 +117,7 @@ export function PublicSubscribePage() {
   const { token } = useParams();
   const { data, isPending, error } = useQuery({
     queryKey: ['public-subscribe', token],
-    queryFn: () => api.get<{ displayName: string; calendarName: string; links: FeedLinks }>(`/api/public/subscribe/${token}`),
+    queryFn: () => api.get<{ displayName: string; calendarName: string; calendars: string[]; links: FeedLinks }>(`/api/public/subscribe/${token}`),
     retry: false,
   });
   if (isPending) return <Loading />;
@@ -111,6 +126,7 @@ export function PublicSubscribePage() {
     <section className="card narrow-page">
       <h1>Add “{data.calendarName}” to your phone</h1>
       <p>Hi {data.displayName}! Tap the button for your phone. You only do this once.</p>
+      {data.calendars.length > 1 && <p className="small muted">Includes: {data.calendars.join(', ')}.</p>}
       <PhoneOptions links={data.links} />
       <CopyField label="Calendar address" value={data.links.https} />
     </section>

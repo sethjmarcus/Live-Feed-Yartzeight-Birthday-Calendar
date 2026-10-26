@@ -2,17 +2,26 @@
  * Shapes of the JSON exchanged between server and browser.
  */
 import type { EventCore } from './occurrences.js';
-import type { Permission } from './permissions.js';
+import type { AppAdminAccess, CalendarAccess, Permission } from './permissions.js';
 import type { FeedPrefs, Settings } from './schemas.js';
 import type { HebrewDate, IsoDate } from './hebrewCalendar.js';
 import type { EventType } from './eventTypes.js';
+
+/** One person's membership of one calendar. */
+export interface MembershipDTO {
+  calendarId: number;
+  calendarName: string;
+  permissions: Permission[];
+  inFeed: boolean;
+}
 
 export interface UserDTO {
   id: number;
   username: string;
   displayName: string;
   active: boolean;
-  permissions: Permission[];
+  appAdmin: boolean;
+  memberships: MembershipDTO[];
   hasPassword: boolean;
   feedPrefs: FeedPrefs;
   createdAt: string;
@@ -21,15 +30,56 @@ export interface UserDTO {
   lastFeedAgent: string | null;
 }
 
+/** The signed-in user, plus what they may do in each calendar. */
+export interface SessionUserDTO extends UserDTO {
+  calendars: CalendarAccess[];
+}
+
 export interface SessionDTO {
-  user: UserDTO | null;
+  user: SessionUserDTO | null;
   needsSetup: boolean;
   csrfToken: string;
-  calendarName: string;
+  siteName: string;
+  appAdminAccess: AppAdminAccess;
 }
+
+export interface CalendarDTO {
+  id: number;
+  name: string;
+  createdAt: string;
+  createdBy: number | null;
+}
+
+/** What an app admin sees of every calendar, even ones they can't open. */
+export interface CalendarOverviewDTO extends CalendarDTO {
+  memberCount: number;
+  eventCount: number;
+}
+
+export interface MemberDTO {
+  userId: number;
+  displayName: string;
+  username: string;
+  active: boolean;
+  hasPassword: boolean;
+  permissions: Permission[];
+  inFeed: boolean;
+  addedAt: string;
+}
+
+export interface CalendarDetailDTO {
+  calendar: CalendarOverviewDTO;
+  members: MemberDTO[];
+  /** People who can be added (null when the directory is hidden from this user). */
+  directory: { id: number; displayName: string; username: string }[] | null;
+}
+
+/** Calendar id → name, for labels. */
+export type CalendarNameMap = Record<number, string>;
 
 export interface EventDTO extends EventCore {
   id: number;
+  calendarId: number;
   dateEntry: 'gregorian' | 'hebrew';
   revision: number;
   createdBy: number | null;
@@ -47,6 +97,7 @@ export interface AuditEntryDTO {
   at: string;
   actorId: number | null;
   action: string;
+  calendarId: number | null;
   eventId: number | null;
   targetUserId: number | null;
   label: string | null;
@@ -60,6 +111,7 @@ export interface UpcomingItem {
   kind: 'event' | 'holiday';
   type: EventType | 'holiday';
   eventId?: number;
+  calendarId?: number;
   iso: IsoDate;
   abs: number;
   hebrew: HebrewDate;
@@ -89,6 +141,7 @@ export interface UserDetailDTO {
   links: FeedLinks;
   activity: AuditEntryDTO[];
   names: NameMap;
+  calendarNames: CalendarNameMap;
 }
 
 export interface HebcalStatus {

@@ -3,7 +3,8 @@
  */
 import { Router, type RequestHandler } from 'express';
 import type { UserService } from '../users/userService.js';
-import { toUserDTO } from '../users/userService.js';
+import { toSessionUserDTO, toUserDTO } from '../users/userService.js';
+import type { CalendarService } from '../calendars/calendarService.js';
 import type { SettingsService } from '../settings/settingsService.js';
 import { parse, signIn, signOut } from '../../http/middleware.js';
 import { acceptInviteSchema, loginSchema, setupSchema } from '../../../shared/schemas.js';
@@ -14,18 +15,20 @@ import type { Request, Response } from 'express';
 export function authRoutes(deps: {
   users: UserService;
   settings: SettingsService;
+  calendars: CalendarService;
   csrfToken: (req: Request, res: Response) => string;
   authRateLimit: RequestHandler;
 }): Router {
-  const { users, settings, csrfToken, authRateLimit } = deps;
+  const { users, settings, calendars, csrfToken, authRateLimit } = deps;
   const r = Router();
 
   const session: RequestHandler = async (req, res) => {
     const body: SessionDTO = {
-      user: req.user ? toUserDTO(req.user) : null,
+      user: req.user ? toSessionUserDTO(req.user) : null,
       needsSetup: await users.needsSetup(),
       csrfToken: csrfToken(req, res),
-      calendarName: (await settings.get()).calendarName,
+      siteName: (await settings.get()).siteName,
+      appAdminAccess: calendars.appAdminAccess,
     };
     res.json(body);
   };

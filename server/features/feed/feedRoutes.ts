@@ -4,7 +4,7 @@
  */
 import { Router } from 'express';
 import type { FeedService } from './feedService.js';
-import type { UserService } from '../users/userService.js';
+import { feedCalendars, type UserService } from '../users/userService.js';
 import type { SettingsService } from '../settings/settingsService.js';
 import { baseUrl, feedLinks } from '../../http/links.js';
 import { NotFoundError } from '../../http/errors.js';
@@ -23,7 +23,7 @@ export function feedRoutes(deps: { feed: FeedService; users: UserService; settin
     }
     const body = await feed.buildFeed(user);
     await users.recordFeedFetch(user, req.get('user-agent'));
-    const filename = (await settings.get()).calendarName.replace(/[^\w.-]+/g, '_') || 'calendar';
+    const filename = (await settings.get()).siteName.replace(/[^\w.-]+/g, '_') || 'calendar';
     res.set({
       'Content-Type': 'text/calendar; charset=utf-8',
       'Content-Disposition': `inline; filename="${filename}.ics"`,
@@ -40,9 +40,11 @@ export function publicSubscribeRoutes(deps: { users: UserService; settings: Sett
   r.get('/public/subscribe/:token', async (req, res) => {
     const user = await users.bySubscribeToken(String(req.params.token));
     if (!user) throw new NotFoundError('This calendar link is not valid any more. Ask the admin for a new one.');
+    const calendars = feedCalendars(user).map(m => m.calendarName);
     res.json({
       displayName: user.displayName,
-      calendarName: (await settings.get()).calendarName,
+      calendarName: calendars.length === 1 ? calendars[0] : (await settings.get()).siteName,
+      calendars,
       links: feedLinks(baseUrl(req, config), user.feedToken),
     });
   });

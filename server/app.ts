@@ -17,6 +17,8 @@ import { UserService } from './features/users/userService.js';
 import { EventService } from './features/events/eventService.js';
 import { FeedService } from './features/feed/feedService.js';
 import { SettingsService } from './features/settings/settingsService.js';
+import { CalendarService } from './features/calendars/calendarService.js';
+import { calendarRoutes } from './features/calendars/calendarRoutes.js';
 import { authRoutes } from './features/auth/authRoutes.js';
 import { eventRoutes } from './features/events/eventRoutes.js';
 import { userRoutes } from './features/users/userRoutes.js';
@@ -53,6 +55,7 @@ export async function createApp(config: Config, opts: { fetch?: typeof globalThi
     baseUrl: config.hebcalApiBase, refreshHours: config.hebcalRefreshHours, fetch: opts.fetch, log,
   });
   const users = new UserService(uow, () => setupCode);
+  const calendars = new CalendarService(uow, config.appAdminAccess);
   const events = new EventService(uow);
   const feed = new FeedService(uow, hebcal);
   const settings = new SettingsService(uow, hebcal, sqlite, config.dataDir, log);
@@ -74,11 +77,12 @@ export async function createApp(config: Config, opts: { fetch?: typeof globalThi
   app.use(feedRoutes({ feed, users, settings }));
 
   const api = Router();
-  api.use(express.json({ limit: '200kb' }), doubleCsrfProtection, loadUser(uow.repos.users));
-  api.use(authRoutes({ users, settings, csrfToken: (req, res) => generateCsrfToken(req, res), authRateLimit: createAuthRateLimit() }));
+  api.use(express.json({ limit: '200kb' }), doubleCsrfProtection, loadUser(uow.repos.users, u => calendars.actorFor(u)));
+  api.use(authRoutes({ users, settings, calendars, csrfToken: (req, res) => generateCsrfToken(req, res), authRateLimit: createAuthRateLimit() }));
   api.use(eventRoutes({ events, feed, users }));
-  api.use(userRoutes({ users, settings, events: uow.repos.events, config }));
-  api.use(settingsRoutes({ settings, users, hebcal, config }));
+  api.use(calendarRoutes({ calendars }));
+  api.use(userRoutes({ users, settings, events: uow.repos.events, calendars: uow.repos.calendars, config }));
+  api.use(settingsRoutes({ settings, users, calendars: uow.repos.calendars, hebcal, config }));
   api.use(publicSubscribeRoutes({ users, settings, config }));
   api.use(() => { throw new NotFoundError('No such API endpoint.'); });
   app.use('/api', api);
@@ -105,7 +109,7 @@ export async function createApp(config: Config, opts: { fetch?: typeof globalThi
     log,
     /** The first-run setup code (null once an admin exists). */
     get setupCode() { return setupCode; },
-    services: { users, events, feed, settings, hebcal },
+    services: { users, calendars, events, feed, settings, hebcal },
     repos: uow.repos,
     start() {
       hebcal.start();

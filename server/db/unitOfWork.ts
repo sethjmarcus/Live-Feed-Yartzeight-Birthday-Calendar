@@ -8,10 +8,12 @@ import { EventRepository } from '../features/events/eventRepository.js';
 import { AuditRepository } from '../features/audit/auditRepository.js';
 import { SettingsRepository } from '../features/settings/settingsRepository.js';
 import { HebcalCacheRepository } from '../features/hebcal/hebcalCacheRepository.js';
+import { CalendarRepository } from '../features/calendars/calendarRepository.js';
 import type { TokenVault } from '../lib/tokens.js';
 
 export interface Repositories {
   users: UserRepository;
+  calendars: CalendarRepository;
   events: EventRepository;
   audit: AuditRepository;
   settings: SettingsRepository;
@@ -21,6 +23,7 @@ export interface Repositories {
 function repositories(ex: Executor, vault: TokenVault): Repositories {
   return {
     users: new UserRepository(ex, vault),
+    calendars: new CalendarRepository(ex),
     events: new EventRepository(ex),
     audit: new AuditRepository(ex),
     settings: new SettingsRepository(ex),

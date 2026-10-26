@@ -4,7 +4,7 @@ import { useForm, useWatch, type Control } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '../api';
-import { useSession } from '../session';
+import { useCalendarChoice, useSession } from '../session';
 import { useToast } from '../components/Layout';
 import { applyServerErrors } from '../forms';
 import { Field, FormError, Loading, nameOf } from '../components/ui';
@@ -16,7 +16,7 @@ import { formatDateTime } from '../../../shared/format';
 import * as cal from '../../../shared/hebrewCalendar';
 import type { EventDTO, NameMap } from '../../../shared/api';
 
-const EMPTY: EventInput = {
+const EMPTY: Omit<EventInput, 'calendarId'> = {
   type: 'birthday', name: '', title: '', hebrewName: '', notes: '', basis: 'gregorian',
   dateEntry: 'gregorian', gDate: '', afterSunset: false, hDay: undefined, hMonth: 7, hYear: undefined,
 };
@@ -24,6 +24,7 @@ const EMPTY: EventInput = {
 function toFormValues(ev: EventDTO): EventInput {
   const hebrew = ev.dateEntry === 'hebrew';
   return {
+    calendarId: ev.calendarId,
     type: ev.type, name: ev.name, title: ev.title, hebrewName: ev.hebrewName, notes: ev.notes, basis: ev.basis,
     dateEntry: ev.dateEntry, afterSunset: ev.afterSunset,
     gDate: hebrew ? '' : ev.gDate,
@@ -49,7 +50,14 @@ export function EventFormPage() {
 
 function EventForm({ event, names }: { event?: EventDTO; names: NameMap }) {
   const isNew = !event;
-  const { user, can } = useSession();
+  const { user, can, calendarsWhere } = useSession();
+  const [chosen] = useCalendarChoice(user);
+  const addable = calendarsWhere('add');
+  // Where it can go: calendars you can add to (plus its current one, when editing).
+  const choices = event && !addable.some(c => c.id === event.calendarId)
+    ? [...(user?.calendars.filter(c => c.id === event.calendarId) ?? []), ...addable]
+    : addable;
+  const defaultCalendar = addable.find(c => c.id === chosen)?.id ?? addable[0]?.id ?? '';
   const navigate = useNavigate();
   const qc = useQueryClient();
   const toast = useToast();
@@ -58,7 +66,7 @@ function EventForm({ event, names }: { event?: EventDTO; names: NameMap }) {
 
   const form = useForm<EventInput, unknown, ValidEventInput>({
     resolver: zodResolver(eventInputSchema),
-    defaultValues: event ? toFormValues(event) : EMPTY,
+    defaultValues: event ? toFormValues(event) : { ...EMPTY, calendarId: defaultCalendar },
   });
   const { register, handleSubmit, setValue, control, formState: { errors, isSubmitting } } = form;
   const type = useWatch({ control, name: 'type' });
@@ -76,7 +84,7 @@ function EventForm({ event, names }: { event?: EventDTO; names: NameMap }) {
         ? await api.post<{ event: EventDTO }>('/api/events', values)
         : await api.put<{ event: EventDTO; changed: boolean }>(`/api/events/${event.id}`, values);
       await qc.invalidateQueries();
-      toast({ type: 'ok', msg: isNew ? `Added “${displayName(res.event)}”. It will appear on everyone's calendar at their next sync.` : `Saved “${displayName(res.event)}”.` });
+      toast({ type: 'ok', msg: isNew ? `Added “${displayName(res.event)}”. It will appear on subscribers' phones at their next sync.` : `Saved “${displayName(res.event)}”.` });
       navigate('/events');
     } catch (err) { setError(applyServerErrors(err, form.setError)); }
   });
@@ -86,7 +94,7 @@ function EventForm({ event, names }: { event?: EventDTO; names: NameMap }) {
     try {
       await api.del(`/api/events/${event.id}`);
       await qc.invalidateQueries();
-      toast({ type: 'ok', msg: `Deleted “${displayName(event)}”.${can('admin') ? ' Admins can restore it from “Show deleted”.' : ''}` });
+      toast({ type: 'ok', msg: `Deleted “${displayName(event)}”.${can('manage', event.calendarId) ? ' You can restore it from “Show deleted”.' : ''}` });
       navigate('/events');
     } catch (err) { setError(applyServerErrors(err, form.setError)); }
   };
@@ -94,7 +102,7 @@ function EventForm({ event, names }: { event?: EventDTO; names: NameMap }) {
   return (
     <section className="card narrow-page">
       <h1>{isNew ? 'Add an event' : 'Edit event'}</h1>
-      {!isNew && can('admin') && (
+      {!isNew && can('manage', event.calendarId) && (
         <p className="muted small">
           Added by <strong>{nameOf(names, event.createdBy)}</strong> on {formatDateTime(event.createdAt)}
           {event.updatedAt !== event.createdAt && <> · last edited by <strong>{nameOf(names, event.updatedBy)}</strong> on {formatDateTime(event.updatedAt)}</>}
@@ -103,6 +111,11 @@ function EventForm({ event, names }: { event?: EventDTO; names: NameMap }) {
       )}
       <FormError message={error} />
       <form onSubmit={onSubmit} className="stack" noValidate>
+        {choices.length > 1 ? (
+          <Field label="Calendar" error={errors.calendarId?.message}>
+            <select {...register('calendarId')}>{choices.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}</select>
+          </Field>
+        ) : <input type="hidden" {...register('calendarId')} />}
         <fieldset className="types">
           <legend>Type</legend>
           {EVENT_TYPE_KEYS.map(k => (

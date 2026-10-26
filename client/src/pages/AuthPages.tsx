@@ -9,7 +9,6 @@ import { useRefreshSession, useSession } from '../session';
 import { applyServerErrors } from '../forms';
 import { Field, FormError, Loading } from '../components/ui';
 import { acceptInviteSchema, loginSchema, setupSchema } from '../../../shared/schemas';
-import { can } from '../../../shared/permissions';
 import type { UserDTO } from '../../../shared/api';
 
 // ---------------------------------------------------------------- first-run setup
@@ -38,13 +37,13 @@ export function SetupPage() {
   return (
     <section className="card narrow-page">
       <h1>Welcome — create the admin account</h1>
-      <p className="muted">This runs once. The admin manages who can subscribe, add and edit events. The setup code proves you're the one running the server.</p>
+      <p className="muted">This runs once. You become the app admin: you create calendars and decide who can subscribe, add and edit events in each. The setup code proves you're the one running the server.</p>
       <FormError message={error} />
       <form onSubmit={onSubmit} className="stack" noValidate>
         <Field label="Setup code" hint="— printed in the server's log when it started (e.g. A1B2C3-D4E5F6)" error={errors.setupCode?.message}>
           <input {...register('setupCode')} autoCapitalize="characters" autoComplete="off" spellCheck={false} />
         </Field>
-        <Field label="Calendar name" error={errors.calendarName?.message}><input {...register('calendarName')} /></Field>
+        <Field label="Name of your first calendar" hint="(you can add more calendars later)" error={errors.calendarName?.message}><input {...register('calendarName')} /></Field>
         <Field label="Your name" error={errors.displayName?.message}><input {...register('displayName')} autoComplete="name" /></Field>
         <Field label="Username" error={errors.username?.message}><input {...register('username')} autoCapitalize="none" autoComplete="username" /></Field>
         <Field label="Password" error={errors.password?.message}><input type="password" {...register('password')} autoComplete="new-password" /></Field>
@@ -116,7 +115,7 @@ export function InvitePage() {
     try {
       const { user } = await api.post<{ user: UserDTO }>(`/api/invites/${token}`, values);
       await refresh();
-      navigate(can(user, 'subscribe') ? '/subscribe' : '/', { replace: true });
+      navigate(user.memberships.some(m => m.permissions.includes('subscribe') || m.permissions.includes('manage')) ? '/subscribe' : '/', { replace: true });
     } catch (err) { setError(applyServerErrors(err, form.setError)); }
   });
 

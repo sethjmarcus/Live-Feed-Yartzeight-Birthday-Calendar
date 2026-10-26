@@ -23,11 +23,15 @@ export function fakeHebcal(calls: Record<string, string>[] = []): typeof fetch {
   }) as typeof fetch;
 }
 
-export async function startTestApp({ legacyFixture, fetch = fakeHebcal(), env = {}, logStream }: {
-  legacyFixture?: string; fetch?: typeof globalThis.fetch; env?: Record<string, string>; logStream?: import('pino').DestinationStream;
+export async function startTestApp({ legacyFixture, prepare, fetch = fakeHebcal(), env = {}, logStream }: {
+  legacyFixture?: string;
+  /** Put files into the data folder before the app starts (e.g. an older database). */
+  prepare?: (dataDir: string) => Promise<void> | void;
+  fetch?: typeof globalThis.fetch; env?: Record<string, string>; logStream?: import('pino').DestinationStream;
 } = {}) {
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'feedcal-'));
   if (legacyFixture) fs.copyFileSync(legacyFixture, path.join(dataDir, 'db.json'));
+  await prepare?.(dataDir);
   const config = loadConfig(path.resolve(import.meta.dirname, '..'), {
     DATA_DIR: dataDir, CLIENT_MODE: 'none', LOG_LEVEL: 'silent', HEBCAL_API_BASE: 'https://hebcal.test', ...env,
   });
