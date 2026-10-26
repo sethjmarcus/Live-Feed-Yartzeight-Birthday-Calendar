@@ -1,0 +1,60 @@
+{
+  "name": "yahrzeit-feed-calendar",
+  "version": "3.0.0",
+  "description": "Self-hosted shared calendar feed for birthdays, anniversaries and yahrzeits with Hebrew and English dates",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "dev": "NODE_ENV=development tsx watch --clear-screen=false server/index.ts",
+    "build": "vite build && tsc -p tsconfig.json",
+    "start": "node dist/server/index.js",
+    "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p client/tsconfig.json",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@hebcal/core": "^6.14.6",
+    "@hebcal/hdate": "^0.23.1",
+    "@hookform/resolvers": "^5.9.2",
+    "@tanstack/react-query": "^5.105.0",
+    "better-sqlite3": "^13.0.3",
+    "cookie-parser": "^1.4.7",
+    "cookie-session": "^2.1.1",
+    "csrf-csrf": "^4.0.3",
+    "express": "^5.3.0",
+    "express-rate-limit": "^8.7.1",
+    "helmet": "^8.3.0",
+    "ical-generator": "^11.1.2",
+    "kysely": "^0.29.7",
+    "pino": "^10.4.0",
+    "pino-http": "^11.0.0",
+    "qrcode.react": "^4.2.0",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1",
+    "react-hook-form": "^7.91.0",
+    "react-router": "^8.5.0",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^9.6.0",
+    "@types/cookie-parser": "^1.4.10",
+    "@types/cookie-session": "^2.0.49",
+    "@types/express": "^5.0.6",
+    "@types/node": "^26.6.5",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@types/supertest": "^7.2.1",
+    "@vitejs/plugin-react": "^6.1.2",
+    "supertest": "^7.3.1",
+    "tsx": "^4.23.15",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.5",
+    "vitest": "^5.0.5"
+  },
+  "allowScripts": {
+    "better-sqlite3@13.0.3": true,
+    "esbuild@0.28.2": true
+  }
+}

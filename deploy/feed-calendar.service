@@ -1,0 +1,24 @@
+# systemd *user* service — keeps the calendar running and starts it at boot.
+#
+# Install (after `npm install && npm run build`):
+#   mkdir -p ~/.config/systemd/user
+#   cp deploy/feed-calendar.service ~/.config/systemd/user/
+#   # Using nvm? Set NODE below to the output of:  which node
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now feed-calendar
+#   sudo loginctl enable-linger $USER     # keep running when you're logged out
+# Logs:  journalctl --user -u feed-calendar -f
+[Unit]
+Description=Yahrzeit feed calendar
+After=network-online.target
+
+[Service]
+Environment=NODE=/usr/bin/node
+Environment=NODE_ENV=production
+WorkingDirectory=%h/Documents/yarzeight_feed_calendar
+ExecStart=/bin/sh -c 'exec "$NODE" dist/server/index.js'
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target

@@ -1,0 +1,7 @@
+# Caddy: HTTPS in front of the app, with automatic free certificates (Let's Encrypt).
+# 1. Replace calendar.example.com with your domain (its DNS must point at this server).
+# 2. sudo cp deploy/Caddyfile /etc/caddy/Caddyfile && sudo systemctl reload caddy
+calendar.example.com {
+	encode zstd gzip
+	reverse_proxy 127.0.0.1:8080
+}
