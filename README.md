@@ -26,6 +26,10 @@ npm start
 
 Open **http://localhost:8080**. The first visit creates the admin account and your first calendar. It asks for a **setup code**, which the server prints in its log when it starts (e.g. `First-run setup code: A1B2C3-D4E5F6`). This stops anyone else on the network from claiming the admin account first.
 
+**Locked out?** On the server, in the app folder:
+- `node dist/server/cli.js users` lists the accounts.
+- `node dist/server/cli.js reset-link <username>` prints a one-time link to set a new password.
+
 **Developing:** `npm run dev` runs the server with the React app hot-reloading, on one port. `npm test` runs the tests, and `npm run typecheck` checks the types.
 
 **Upgrading from earlier versions:** your data carries over automatically.
