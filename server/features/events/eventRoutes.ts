@@ -8,7 +8,7 @@ import type { UserService } from '../users/userService.js';
 import type { CalendarEvent } from './eventRepository.js';
 import type { Actor } from '../users/userRepository.js';
 import { currentUser, parse, requireUser } from '../../http/middleware.js';
-import { eventInputSchema } from '../../../shared/schemas.js';
+import { eventInputSchema, eventsQuerySchema, upcomingQuerySchema } from '../../../shared/schemas.js';
 import { can } from '../../../shared/permissions.js';
 
 const UPCOMING_RANGES = [30, 90, 365];
@@ -23,14 +23,15 @@ export function eventRoutes(deps: { events: EventService; feed: FeedService; use
     users.names(list.filter(e => can(actor, 'manage', e.calendarId)).flatMap(e => [e.createdBy, e.updatedBy, e.deletedBy]));
 
   r.get('/upcoming', requireUser(), async (req, res) => {
-    const days = UPCOMING_RANGES.includes(Number(req.query.days)) ? Number(req.query.days) : 90;
-    const calendar = req.query.calendar ? Number(req.query.calendar) : null;
+    const q = parse(upcomingQuerySchema, req.query);
+    const days = UPCOMING_RANGES.includes(Number(q.days)) ? Number(q.days) : 90;
+    const calendar = q.calendar ? Number(q.calendar) : null;
     res.json({ days, items: await feed.upcoming(currentUser(req), days, calendar) });
   });
 
   r.get('/events', requireUser(), async (req, res) => {
     const actor = currentUser(req);
-    const list = await events.search(actor, req.query as Record<string, string>);
+    const list = await events.search(actor, parse(eventsQuerySchema, req.query));
     res.json({ events: list, names: await namesFor(actor, list) });
   });
 

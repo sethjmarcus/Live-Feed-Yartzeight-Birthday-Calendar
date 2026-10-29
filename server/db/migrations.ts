@@ -156,4 +156,22 @@ export const migrations: Record<string, Migration> = {
       `);
     },
   },
+  '004_sessions': {
+    // Sign-ins are kept on the server, so signing out (or "sign out everywhere", or
+    // disabling an account) ends them for real. The cookie only holds a random token;
+    // this table holds its keyed hash, never the token itself.
+    async up(db) {
+      await run(db, `
+        CREATE TABLE sessions (
+          id              TEXT PRIMARY KEY,
+          user_id         INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+          session_version INTEGER NOT NULL,
+          created_at      TEXT NOT NULL,
+          last_seen_at    TEXT NOT NULL,
+          user_agent      TEXT
+        );
+        CREATE INDEX sessions_user ON sessions(user_id)
+      `);
+    },
+  },
 };

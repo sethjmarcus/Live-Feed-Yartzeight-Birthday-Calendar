@@ -5,15 +5,18 @@
 import type { UnitOfWork } from '../../db/unitOfWork.js';
 import type { Actor, User, NewUser } from './userRepository.js';
 import type { SessionUserDTO, UserDTO } from '../../../shared/api.js';
-import { ROLES, can, isAppAdmin, roleName, type Permission } from '../../../shared/permissions.js';
+import { ROLES, can, canAdministerAccount, isAppAdmin, roleName, type Permission } from '../../../shared/permissions.js';
 import { EVENT_TYPE_KEYS } from '../../../shared/eventTypes.js';
 import type { FeedSettings } from '../../../shared/schemas.js';
 import { ForbiddenError, GoneError, NotFoundError, ValidationError } from '../../http/errors.js';
-import { dummyPasswordHash, hashPassword, verifyPassword } from '../../lib/passwords.js';
+import { dummyPasswordHash, hashPassword, needsRehash, verifyPassword } from '../../lib/passwords.js';
 import crypto from 'node:crypto';
 import { diff, nowIso, randomToken } from '../../lib/util.js';
 
+/** First-time setup links. */
 const INVITE_DAYS = 14;
+/** Password-reset links (for people who already have a password) — short, since they grant the account. */
+const RESET_DAYS = 1;
 
 export function toUserDTO(u: User): UserDTO {
   return {
@@ -72,6 +75,7 @@ export class UserService {
       throw new ValidationError('Wrong username or password.');
     }
     user.lastLogin = nowIso();
+    if (needsRehash(user.passwordHash)) user.passwordHash = await hashPassword(password); // upgrade to current settings
     await this.uow.transaction(r => r.users.update(user));
     return user;
   }
@@ -115,9 +119,19 @@ export class UserService {
     return user;
   }
 
+  /** Invalidates every session of this account (the caller then starts a new one for this device). */
+  async signOutEverywhere(user: User) {
+    user.sessionVersion += 1;
+    await this.uow.transaction(async r => {
+      await r.users.update(user);
+      await r.audit.add({ at: nowIso(), actorId: user.id, action: 'user.signOutEverywhere' });
+    });
+    return user;
+  }
+
   /** What goes into a feed: event types, reminders, and (optionally) which calendars. */
   async saveFeedPrefs(actor: Actor, targetId: number, input: FeedSettings) {
-    const user = targetId === actor.id ? actor : await this.adminGet(actor, targetId);
+    const user = targetId === actor.id ? actor : await this.administered(actor, targetId);
     const { calendars, ...prefs } = input;
     user.feedPrefs = prefs;
     await this.uow.transaction(async r => {
@@ -158,6 +172,15 @@ export class UserService {
     return user;
   }
 
+  /** For actions that reveal or take over the account (feed link, reset link). See canAdministerAccount. */
+  async administered(actor: Actor, id: number): Promise<User> {
+    const user = await this.adminGet(actor, id);
+    if (!canAdministerAccount(actor, user)) {
+      throw new ForbiddenError("They're in a calendar you don't manage, so only its owners can see their links.");
+    }
+    return user;
+  }
+
   /**
    * Create an account and add it to one calendar. App admins can do this for any calendar
    * they manage; calendar managers can invite people into their own calendar.
@@ -167,7 +190,7 @@ export class UserService {
     if (await this.users.findByUsername(input.username)) throw new ValidationError('That username is taken.', { username: 'That username is taken.' });
     return this.uow.transaction(async r => {
       const now = nowIso();
-      const created = await r.users.create({ ...newUser({ ...input, appAdmin: false }), ...inviteFields() });
+      const created = await r.users.create({ ...newUser({ ...input, appAdmin: false }), ...inviteFields(INVITE_DAYS) });
       await r.calendars.addMember({ calendarId: input.calendarId, userId: created.id, permissions: input.permissions, inFeed: true, addedAt: now, addedBy: actor.id });
       await r.audit.add({ at: now, actorId: actor.id, action: 'user.create', calendarId: input.calendarId, targetUserId: created.id, label: `${roleName(input.permissions)} access` });
       return (await r.users.findById(created.id))!;
@@ -200,18 +223,21 @@ export class UserService {
   }
 
   /**
-   * A new setup link. App admins can issue one for anyone; a calendar manager only for
-   * someone in their calendar who hasn't finished setting up yet.
+   * A new setup (or password-reset) link — whoever holds it can take over the account.
+   * App admins: for anyone whose calendars they all manage. Calendar owners: only for
+   * someone who hasn't set up yet, isn't an app admin, and is in no calendar but theirs.
    */
   async reissueInvite(actor: Actor, id: number, viaCalendarId?: number) {
     const user = await this.users.findById(id);
     if (!user) throw new NotFoundError('No such user.');
-    const allowed = isAppAdmin(actor) || (
-      viaCalendarId !== undefined && can(actor, 'manage', viaCalendarId) && !user.passwordHash &&
-      user.memberships.some(m => m.calendarId === viaCalendarId)
+    const allowed = canAdministerAccount(actor, user) || (
+      viaCalendarId !== undefined && can(actor, 'manage', viaCalendarId) &&
+      !user.passwordHash && !user.appAdmin &&
+      user.memberships.some(m => m.calendarId === viaCalendarId) &&
+      user.memberships.every(m => can(actor, 'manage', m.calendarId))
     );
     if (!allowed) throw new ForbiddenError();
-    Object.assign(user, inviteFields());
+    Object.assign(user, inviteFields(user.passwordHash ? RESET_DAYS : INVITE_DAYS));
     await this.uow.transaction(async r => {
       await r.users.update(user);
       await r.audit.add({ at: nowIso(), actorId: actor.id, action: 'user.invite', calendarId: viaCalendarId ?? null, targetUserId: user.id });
@@ -220,7 +246,7 @@ export class UserService {
   }
 
   async resetFeedToken(actor: Actor, id: number) {
-    const user = await this.adminGet(actor, id);
+    const user = await this.administered(actor, id);
     Object.assign(user, { feedToken: randomToken(), lastFeedFetch: null, lastFeedAgent: null });
     await this.uow.transaction(async r => {
       await r.users.update(user);
@@ -255,6 +281,6 @@ function newUser(p: { username: string; displayName: string; appAdmin: boolean; 
   };
 }
 
-function inviteFields() {
-  return { inviteToken: randomToken(), inviteExpires: new Date(Date.now() + INVITE_DAYS * 86_400_000).toISOString() };
+function inviteFields(days: number) {
+  return { inviteToken: randomToken(), inviteExpires: new Date(Date.now() + days * 86_400_000).toISOString() };
 }

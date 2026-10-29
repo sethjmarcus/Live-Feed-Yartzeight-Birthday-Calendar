@@ -9,7 +9,7 @@ import type { CalendarRepository } from '../calendars/calendarRepository.js';
 import type { HebcalGateway } from '../hebcal/hebcalGateway.js';
 import { currentUser, parse, requireAppAdmin, requireUser } from '../../http/middleware.js';
 import { baseUrl } from '../../http/links.js';
-import { settingsSchema } from '../../../shared/schemas.js';
+import { activityQuerySchema, settingsSchema } from '../../../shared/schemas.js';
 import type { SettingsDTO } from '../../../shared/api.js';
 import type { Config } from '../../config.js';
 
@@ -34,7 +34,7 @@ export function settingsRoutes(deps: { settings: SettingsService; users: UserSer
 
   /** App admins, and calendar managers (for their calendars). */
   r.get('/activity', requireUser(), async (req, res) => {
-    const result = await settings.activity(currentUser(req), req.query as Record<string, string>);
+    const result = await settings.activity(currentUser(req), parse(activityQuerySchema, req.query));
     res.json({
       ...result,
       names: await users.names(result.entries.flatMap(e => [e.actorId, e.targetUserId])),

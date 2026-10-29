@@ -113,19 +113,27 @@ Go to **Settings** and set:
 
 Data is downloaded from hebcal.com in the background, covering last year through two years ahead, and refreshed every 12 hours. If hebcal.com can't be reached, holidays are computed locally instead. Data © Hebcal.com, CC BY 4.0.
 
-## 7. Later: going public (HTTPS)
+## 7. Going public (HTTPS)
 
-Once you have a public HTTPS address (Cloudflare Tunnel, Tailscale Funnel, or a cloud VM using the Dockerfile), set:
+The recommended setup is **Cloudflare Tunnel**, with Cloudflare Access as an optional extra lock:
+- The `cloudflared` program on the server keeps an outgoing connection to Cloudflare, so the server needs **no open ports** for the web.
+- Cloudflare provides HTTPS and absorbs floods of traffic (DDoS).
+- Access can require a one-time email code before anyone reaches the site. Leave `/feed/*` public, so phones and Google Calendar can fetch their calendars.
+
+Then set:
 
 ```
 PUBLIC_URL=https://calendar.yourdomain.com
 TRUST_PROXY=1
 HOST=127.0.0.1
+CLIENT_IP_HEADER=cf-connecting-ip
 ```
 
-`TRUST_PROXY=1` trusts exactly one proxy, the tunnel, to report each visitor's real IP address. `HOST=127.0.0.1` makes sure the tunnel is the only way in. Without it, someone could connect directly and fake their address to get around the sign-in limits.
+- `HOST=127.0.0.1` makes the tunnel the only way in.
+- `CLIENT_IP_HEADER` takes each visitor's real address from Cloudflare, for the sign-in and request limits.
+- Without Cloudflare (for example Caddy on a cloud server), leave out `CLIENT_IP_HEADER`. `TRUST_PROXY=1` then trusts exactly one proxy to report the address.
 
-This turns on secure cookies and strict HTTPS headers. Anyone who subscribed with the old LAN address then needs to subscribe again with the new link.
+This also turns on secure cookies and strict HTTPS headers. Anyone who subscribed with an old address needs to subscribe again with the new link.
 
 ## 8. Data & backups
 
@@ -139,6 +147,14 @@ Admins can also download a backup from Settings. To move servers, copy the `data
 
 **Protected links:** feed and invite links are never stored in plain text. The database keeps only a fingerprint (to recognise a link) and an encrypted copy (to show it again), both keyed by `secret.key`. That key is not part of backups, so a leaked database or backup doesn't reveal anyone's links.
 
-**Logs:** feed, invite and subscribe-page tokens are replaced with `[redacted]` in the logs, and cookies and security tokens are never logged.
+**Logs:** feed, invite and subscribe-page tokens are replaced with `[redacted]` in the logs, and cookies and security tokens are never logged. Failed sign-ins are logged with the username and address.
+
+**Sign-ins** are kept on the server:
+- Signing out ends a sign-in for real.
+- A sign-in lapses after 30 days without use, and after 180 days regardless.
+- **Account → Sign out on all other devices** ends every other sign-in, for a lost phone or a shared computer.
+- Phone calendar feeds are separate links and keep working.
+
+**Limits:** each address may make 300 requests a minute to the app and 60 feed requests a minute. Sign-in, setup and invite pages allow 20 tries per 15 minutes. Password-reset links last 24 hours; first-time setup links last 14 days.
 
 **License note:** the Hebcal libraries are GPL-2.0. That's fine for running it yourself. If you distribute the app, GPL terms apply.

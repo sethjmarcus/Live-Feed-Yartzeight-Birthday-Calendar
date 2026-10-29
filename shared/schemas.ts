@@ -156,6 +156,22 @@ export const DEFAULT_SETTINGS: Settings = {
   hebcalHolidays: ['major', 'minor', 'modern', 'roshchodesh', 'fast'],
 };
 
+// ---------------------------------------------------------------- query strings
+// Each value is a single string (a repeated ?a=1&a=2 is rejected), and unknown ones are dropped.
+const qId = z.string().regex(/^\d{1,9}$/, 'Invalid id.').optional();
+const qText = z.string().max(200).optional();
+
+export const eventsQuerySchema = z.object({
+  calendar: qId, by: qId, q: qText,
+  type: z.union([z.enum(EVENT_TYPE_KEYS), z.literal('')]).optional(),
+  deleted: z.enum(['1', '']).optional(),
+});
+export const upcomingQuerySchema = z.object({ calendar: qId, days: z.string().regex(/^\d{1,4}$/).optional() });
+export const activityQuerySchema = z.object({
+  calendar: qId, user: qId, page: z.string().regex(/^\d{1,6}$/).optional(),
+  kind: z.enum(['', 'event', 'user']).optional(),
+});
+
 /** Field → message map for showing validation errors next to inputs. */
 export function fieldErrors(error: z.ZodError): Record<string, string> {
   const out: Record<string, string> = {};

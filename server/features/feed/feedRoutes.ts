@@ -21,7 +21,7 @@ export function feedRoutes(deps: { feed: FeedService; users: UserService; settin
       res.status(404).type('text/plain').send('Not found');
       return;
     }
-    const body = await feed.buildFeed(user);
+    const body = await feed.feedFor(user);
     await users.recordFeedFetch(user, req.get('user-agent'));
     const filename = (await settings.get()).siteName.replace(/[^\w.-]+/g, '_') || 'calendar';
     res.set({

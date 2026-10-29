@@ -26,8 +26,28 @@ const ALARMS: Record<FeedPrefs['alarm'], number[]> = {
 /** Yahrzeits begin the evening before: their "day before" reminder fires at 16:00. */
 const YAHRZEIT_EVE = 8 * HOUR;
 
+/** How long a built feed is reused when nothing has changed (holiday data refreshes in the background). */
+const CACHE_MS = 10 * 60_000;
+
 export class FeedService {
+  /** userId → last feed built, with the data version and day it was built for. */
+  private cache = new Map<number, { body: string; version: number; today: number; at: number }>();
+
   constructor(private uow: UnitOfWork, private hebcal: HebcalGateway) {}
+
+  /**
+   * The person's feed, reused while nothing has changed — phones poll often, and building
+   * years of events each time would let one client keep the server busy.
+   */
+  async feedFor(user: User, today = cal.todayAbs()): Promise<string> {
+    const hit = this.cache.get(user.id);
+    const fresh = hit && hit.version === this.uow.version && hit.today === today && Date.now() - hit.at < CACHE_MS;
+    if (fresh) return hit.body;
+    const version = this.uow.version;
+    const body = await this.buildFeed(user, today);
+    this.cache.set(user.id, { body, version, today, at: Date.now() });
+    return body;
+  }
 
   /**
    * One feed per person, covering every calendar they subscribe to — so a calendar they

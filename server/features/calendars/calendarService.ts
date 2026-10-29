@@ -89,6 +89,11 @@ export class CalendarService {
     const person = await this.uow.repos.users.findById(userId);
     if (!person) throw new NotFoundError('No such person.');
     const existing = await this.repo.findMember(calendarId, userId);
+    // Adding an existing account needs the people list: otherwise anyone could be pulled
+    // in by id — revealing their name, or (with a pending invite) taking over the account.
+    if (!existing && !this.directoryVisible(actor)) {
+      throw new ForbiddenError('Only an app admin can add existing accounts to a calendar. Invite them as someone new instead.');
+    }
     if (existing?.permissions.includes('manage') && !permissions.includes('manage')) await this.keepAManager(calendarId, userId);
 
     const now = nowIso();

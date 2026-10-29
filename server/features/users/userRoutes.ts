@@ -4,18 +4,20 @@
 import { Router, type Request } from 'express';
 import type { UserService } from './userService.js';
 import { inviteIsValid, toUserDTO } from './userService.js';
+import { canAdministerAccount } from '../../../shared/permissions.js';
 import type { User } from './userRepository.js';
 import type { EventRepository } from '../events/eventRepository.js';
 import type { SettingsService } from '../settings/settingsService.js';
 import type { CalendarRepository } from '../calendars/calendarRepository.js';
-import { currentUser, parse, requireAppAdmin, requireUser, signIn } from '../../http/middleware.js';
+import { currentUser, parse, requireAppAdmin, requireUser } from '../../http/middleware.js';
+import type { SessionStore } from '../../http/sessions.js';
 import { baseUrl, feedLinks } from '../../http/links.js';
 import { accountSchema, feedSettingsSchema, userInviteSchema, userUpdateSchema } from '../../../shared/schemas.js';
 import type { SubscriptionDTO, UserDetailDTO } from '../../../shared/api.js';
 import type { Config } from '../../config.js';
 
-export function userRoutes(deps: { users: UserService; settings: SettingsService; events: EventRepository; calendars: CalendarRepository; config: Config }): Router {
-  const { users, settings, events, calendars, config } = deps;
+export function userRoutes(deps: { users: UserService; settings: SettingsService; events: EventRepository; calendars: CalendarRepository; sessions: SessionStore; config: Config }): Router {
+  const { users, settings, events, calendars, sessions, config } = deps;
   const r = Router();
   const id = (v: unknown) => Number(v);
 
@@ -34,8 +36,15 @@ export function userRoutes(deps: { users: UserService; settings: SettingsService
   r.patch('/me', requireUser(), async (req, res) => {
     const before = currentUser(req).sessionVersion;
     const user = await users.updateOwnAccount(currentUser(req), parse(accountSchema, req.body));
-    if (user.sessionVersion !== before) signIn(req, user); // keep this device signed in
+    if (user.sessionVersion !== before) await sessions.signIn(req, user); // keep this device signed in
     res.json({ user: toUserDTO(user) });
+  });
+
+  /** Ends every other sign-in of this account (lost phone, shared computer…). */
+  r.post('/me/sign-out-others', requireUser(), async (req, res) => {
+    const user = await users.signOutEverywhere(currentUser(req));
+    await sessions.signIn(req, user);
+    res.json({ ok: true });
   });
 
   r.get('/me/subscription', requireUser(), async (req, res) => {
@@ -70,10 +79,11 @@ export function userRoutes(deps: { users: UserService; settings: SettingsService
     const user = await users.adminGet(actor, id(req.params.id));
     const { entries } = await settings.activity(actor, { user: String(user.id) });
     const activity = entries.slice(0, 10);
+    const full = canAdministerAccount(actor, user); // links are hidden for people in calendars you can't open
     const body: UserDetailDTO = {
       user: toUserDTO(user),
-      ...inviteInfo(req, user),
-      links: feedLinks(baseUrl(req, config), user.feedToken),
+      ...(full ? inviteInfo(req, user) : { inviteUrl: null, inviteExpires: null }),
+      links: full ? feedLinks(baseUrl(req, config), user.feedToken) : null,
       activity,
       names: await users.names(activity.flatMap(a => [a.actorId, a.targetUserId])),
       calendarNames: await calendars.names(),
@@ -84,7 +94,7 @@ export function userRoutes(deps: { users: UserService; settings: SettingsService
   r.put('/users/:id', requireAppAdmin(), async (req, res) => {
     const actor = currentUser(req);
     const { user, changed } = await users.updateByAdmin(actor, id(req.params.id), parse(userUpdateSchema, req.body));
-    if (user.id === actor.id) signIn(req, user);
+    if (user.id === actor.id && user.sessionVersion !== actor.sessionVersion) await sessions.signIn(req, user);
     res.json({ user: toUserDTO(user), changed });
   });
 
@@ -98,7 +108,7 @@ export function userRoutes(deps: { users: UserService; settings: SettingsService
   });
 
   r.get('/users/:id/subscription', requireAppAdmin(), async (req, res) => {
-    res.json(await subscription(req, await users.adminGet(currentUser(req), id(req.params.id))));
+    res.json(await subscription(req, await users.administered(currentUser(req), id(req.params.id))));
   });
 
   r.put('/users/:id/feed-prefs', requireAppAdmin(), async (req, res) => {

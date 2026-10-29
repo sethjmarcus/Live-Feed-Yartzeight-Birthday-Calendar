@@ -28,6 +28,11 @@ export interface Config {
    * (several unrelated families on one server).
    */
   appAdminAccess: AppAdminAccess;
+  /**
+   * Take each visitor's address from this header instead (e.g. 'cf-connecting-ip' behind
+   * Cloudflare). Only safe when nothing but that proxy can reach the app (HOST=127.0.0.1).
+   */
+  clientIpHeader: string;
 }
 
 export function loadConfig(rootDir: string, env: NodeJS.ProcessEnv = process.env): Config {
@@ -44,6 +49,7 @@ export function loadConfig(rootDir: string, env: NodeJS.ProcessEnv = process.env
     hebcalRefreshHours: Number(env.HEBCAL_REFRESH_HOURS || 12),
     logLevel: env.LOG_LEVEL || 'info',
     appAdminAccess: env.APP_ADMIN_ACCESS === 'metadata' ? 'metadata' : 'full',
+    clientIpHeader: (env.CLIENT_IP_HEADER || '').trim().toLowerCase(),
   };
 }
 

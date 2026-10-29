@@ -84,6 +84,15 @@ export interface SettingsTable {
   value: string;                // JSON
 }
 
+export interface SessionsTable {
+  id: string;                   // HMAC of the session token in the cookie
+  userId: number;
+  sessionVersion: number;       // must match users.session_version
+  createdAt: string;
+  lastSeenAt: string;
+  userAgent: string | null;
+}
+
 export interface HebcalCacheTable {
   key: string;
   fetchedAt: string;
@@ -98,4 +107,5 @@ export interface DB {
   auditLog: AuditLogTable;
   settings: SettingsTable;
   hebcalCache: HebcalCacheTable;
+  sessions: SessionsTable;
 }

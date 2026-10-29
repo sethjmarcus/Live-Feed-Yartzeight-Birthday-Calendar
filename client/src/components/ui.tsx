@@ -57,7 +57,7 @@ const ACTIONS: Record<string, string> = {
   'event.create': 'added', 'event.update': 'edited', 'event.delete': 'deleted', 'event.restore': 'restored',
   'user.create': 'invited', 'user.update': 'updated the account of', 'user.invite': 'issued a setup link for',
   'user.feedReset': 'reset the feed link of', 'user.activate': 'completed account setup',
-  'user.password': 'changed their password', 'settings.update': 'changed settings', setup: 'set up the site',
+  'user.password': 'changed their password', 'user.signOutEverywhere': 'signed out on all other devices', 'settings.update': 'changed settings', setup: 'set up the site',
   'calendar.create': 'created calendar', 'calendar.rename': 'renamed the calendar to', 'calendar.delete': 'deleted calendar',
   'member.add': 'added', 'member.update': 'changed the role of', 'member.remove': 'removed',
 };

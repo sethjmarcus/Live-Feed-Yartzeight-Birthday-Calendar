@@ -35,12 +35,17 @@ export class UnitOfWork {
   /** Repositories for reads and single-statement writes. */
   readonly repos: Repositories;
 
+  /** Goes up after every committed change — lets caches (feeds) know they're stale. */
+  version = 0;
+
   constructor(private db: Database, private vault: TokenVault) {
     this.repos = repositories(db, vault);
   }
 
   /** Run fn in a transaction; everything commits together or not at all. */
-  transaction<T>(fn: (repos: Repositories) => Promise<T>): Promise<T> {
-    return this.db.transaction().execute(trx => fn(repositories(trx, this.vault)));
+  async transaction<T>(fn: (repos: Repositories) => Promise<T>): Promise<T> {
+    const result = await this.db.transaction().execute(trx => fn(repositories(trx, this.vault)));
+    this.version += 1;
+    return result;
   }
 }

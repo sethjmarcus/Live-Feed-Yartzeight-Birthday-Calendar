@@ -82,6 +82,16 @@ export function isAppAdmin(user: MaybeActor): boolean {
   return !!user && user.active && user.appAdmin;
 }
 
+/**
+ * May the actor administer this person's account — see their feed link, change their feed,
+ * or issue them a password-reset link? Those reveal everything in that person's calendars,
+ * so it takes being an app admin who manages every calendar the person belongs to.
+ * (In 'full' mode app admins manage all calendars, so this is simply "is app admin".)
+ */
+export function canAdministerAccount(actor: MaybeActor, person: { memberships: { calendarId: number }[] }): boolean {
+  return isAppAdmin(actor) && person.memberships.every(m => can(actor, 'manage', m.calendarId));
+}
+
 type EventRef = { calendarId: number; createdBy: number | null; deletedAt?: string | null };
 
 export function canEditEvent(user: MaybeActor, ev: EventRef): boolean {

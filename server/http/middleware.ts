@@ -6,7 +6,7 @@ import type { ErrorRequestHandler, Request, RequestHandler } from 'express';
 import type { ZodType } from 'zod';
 import { isAppAdmin } from '../../shared/permissions.js';
 import { fieldErrors } from '../../shared/schemas.js';
-import type { Actor, User, UserRepository } from '../features/users/userRepository.js';
+import type { Actor } from '../features/users/userRepository.js';
 import { ForbiddenError, HttpError, UnauthorizedError, ValidationError } from './errors.js';
 
 declare module 'express-serve-static-core' {
@@ -15,26 +15,6 @@ declare module 'express-serve-static-core' {
   }
 }
 
-/** Attach req.user from the session (if the session is still valid for that user). */
-export function loadUser(users: UserRepository, toActor: (u: User) => Promise<Actor>): RequestHandler {
-  return async (req, _res, next) => {
-    req.user = null;
-    const { uid, sv } = req.session ?? {};
-    if (uid) {
-      const user = await users.findById(uid);
-      if (user && user.active && user.sessionVersion === sv) req.user = await toActor(user);
-    }
-    next();
-  };
-}
-
-export function signIn(req: Request, user: User) {
-  req.session!.uid = user.id;
-  req.session!.sv = user.sessionVersion;
-}
-export function signOut(req: Request) {
-  req.session = null;
-}
 
 /** The signed-in user, or a 401. */
 export function currentUser(req: Request): Actor {

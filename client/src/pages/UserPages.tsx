@@ -165,7 +165,13 @@ function UserDetail({ data }: { data: UserDetailDTO }) {
           </section>
         </div>
         <div>
-          <section className="card">
+          {!data.links && (
+            <section className="card">
+              <h2>Links hidden</h2>
+              <p className="small muted">{u.displayName} is in a calendar you don't manage, so only that calendar's owners can see their setup and feed links.</p>
+            </section>
+          )}
+          {data.links && <section className="card">
             <h2>Setup / password link</h2>
             {data.inviteUrl ? (
               <>
@@ -173,12 +179,12 @@ function UserDetail({ data }: { data: UserDetailDTO }) {
                 <CopyField value={data.inviteUrl} />
                 <p><a className="btn small ghost" href={`https://wa.me/?text=${encodeURIComponent(share)}`} target="_blank" rel="noopener noreferrer">Share via WhatsApp</a></p>
               </>
-            ) : <p className="small muted">{u.hasPassword ? 'They have a password. Generate a link if they forgot it.' : 'No valid link — generate one.'}</p>}
-            <button className="btn small" onClick={() => run(() => api.post(`/api/users/${u.id}/invite`), 'New setup link created. It replaces any earlier link.')}>
-              {data.inviteUrl ? 'Generate new link' : 'Generate setup link'}
+            ) : <p className="small muted">{u.hasPassword ? 'They have a password. If they forgot it, generate a reset link — it lasts 24 hours.' : 'No valid link — generate one.'}</p>}
+            <button className="btn small" onClick={() => run(() => api.post(`/api/users/${u.id}/invite`), 'New link created. It replaces any earlier link.')}>
+              {data.inviteUrl ? 'Generate new link' : u.hasPassword ? 'Generate reset link' : 'Generate setup link'}
             </button>
-          </section>
-          <section className="card">
+          </section>}
+          {data.links && <section className="card">
             <h2>Phone feed</h2>
             {subscribable(u).length ? (
               <>
@@ -190,7 +196,7 @@ function UserDetail({ data }: { data: UserDetailDTO }) {
                   'Their phone will stop updating until they subscribe again with the new link. Continue?')}>Reset feed link</button>
               </>
             ) : <p className="small muted">They can't subscribe to any calendar yet.</p>}
-          </section>
+          </section>}
           <section className="card">
             <h2>Recent activity</h2>
             <ul className="timeline small">

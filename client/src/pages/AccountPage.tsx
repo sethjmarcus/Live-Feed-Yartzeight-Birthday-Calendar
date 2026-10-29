@@ -31,6 +31,13 @@ export function AccountPage() {
     } catch (err) { setError(applyServerErrors(err, form.setError)); }
   });
 
+  const signOutOthers = async () => {
+    if (!confirm('Sign out everywhere except this browser?')) return;
+    await api.post('/api/me/sign-out-others');
+    await refresh();
+    toast({ type: 'ok', msg: 'Signed out on all other devices.' });
+  };
+
   return (
     <section className="card narrow-page">
       <h1>Your account</h1>
@@ -50,6 +57,10 @@ export function AccountPage() {
         <Field label="New password" hint="(leave blank to keep)" error={errors.newPassword?.message}><input type="password" {...register('newPassword')} autoComplete="new-password" /></Field>
         <button className="btn primary" disabled={isSubmitting}>Save</button>
       </form>
+      <div className="danger-zone">
+        <button type="button" className="btn" onClick={signOutOthers}>Sign out on all other devices</button>
+        <p className="small muted">For a lost phone or a shared computer. This browser stays signed in. Calendar feeds on phones keep working.</p>
+      </div>
     </section>
   );
 }

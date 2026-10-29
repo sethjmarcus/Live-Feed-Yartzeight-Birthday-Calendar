@@ -6,7 +6,8 @@ import type { UserService } from '../users/userService.js';
 import { toSessionUserDTO, toUserDTO } from '../users/userService.js';
 import type { CalendarService } from '../calendars/calendarService.js';
 import type { SettingsService } from '../settings/settingsService.js';
-import { parse, signIn, signOut } from '../../http/middleware.js';
+import { parse } from '../../http/middleware.js';
+import type { SessionStore } from '../../http/sessions.js';
 import { acceptInviteSchema, loginSchema, setupSchema } from '../../../shared/schemas.js';
 import type { SessionDTO } from '../../../shared/api.js';
 import { ForbiddenError } from '../../http/errors.js';
@@ -16,10 +17,12 @@ export function authRoutes(deps: {
   users: UserService;
   settings: SettingsService;
   calendars: CalendarService;
+  sessions: SessionStore;
+  log: { warn: (o: object, msg: string) => void };
   csrfToken: (req: Request, res: Response) => string;
   authRateLimit: RequestHandler;
 }): Router {
-  const { users, settings, calendars, csrfToken, authRateLimit } = deps;
+  const { users, settings, calendars, sessions, log, csrfToken, authRateLimit } = deps;
   const r = Router();
 
   const session: RequestHandler = async (req, res) => {
@@ -37,19 +40,26 @@ export function authRoutes(deps: {
   r.post('/setup', authRateLimit, async (req, res) => {
     if (!(await users.needsSetup())) throw new ForbiddenError('Setup has already been completed.');
     const user = await users.setupFirstAdmin(parse(setupSchema, req.body));
-    signIn(req, user);
+    await sessions.signIn(req, user);
     res.status(201).json({ user: toUserDTO(user) });
   });
 
   r.post('/login', authRateLimit, async (req, res) => {
     const { username, password } = parse(loginSchema, req.body);
-    const user = await users.authenticate(username, password);
-    signIn(req, user);
+    let user;
+    try {
+      user = await users.authenticate(username, password);
+    } catch (err) {
+      // Repeated failures here are what password guessing looks like.
+      log.warn({ username: username.slice(0, 60), ip: req.ip }, 'Failed sign-in');
+      throw err;
+    }
+    await sessions.signIn(req, user);
     res.json({ user: toUserDTO(user) });
   });
 
-  r.post('/logout', (req, res) => {
-    signOut(req);
+  r.post('/logout', async (req, res) => {
+    await sessions.signOut(req);
     res.json({ ok: true });
   });
 
@@ -61,7 +71,7 @@ export function authRoutes(deps: {
   r.post('/invites/:token', authRateLimit, async (req, res) => {
     const { password } = parse(acceptInviteSchema, req.body);
     const user = await users.acceptInvite(String(req.params.token), password);
-    signIn(req, user);
+    await sessions.signIn(req, user);
     res.json({ user: toUserDTO(user) });
   });
 

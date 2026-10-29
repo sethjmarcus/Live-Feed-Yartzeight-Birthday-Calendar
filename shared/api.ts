@@ -138,7 +138,8 @@ export interface UserDetailDTO {
   user: UserDTO;
   inviteUrl: string | null;
   inviteExpires: string | null;
-  links: FeedLinks;
+  /** Null when the viewer can't administer this account (see canAdministerAccount). */
+  links: FeedLinks | null;
   activity: AuditEntryDTO[];
   names: NameMap;
   calendarNames: CalendarNameMap;

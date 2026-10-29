@@ -180,3 +180,173 @@ describe('S6 — sign-in does not reveal which usernames exist', () => {
     }
   });
 });
+
+// ---------------------------------------------------------------- second review (findings 1–8)
+import request from 'supertest';
+import { ROLES } from '../shared/permissions.js';
+import { hashPassword, needsRehash, verifyPassword } from '../server/lib/passwords.js';
+
+type Env = Awaited<ReturnType<typeof startTestApp>>;
+async function setup(env: Env, extra: Record<string, string> = {}) {
+  const admin = await env.client();
+  await admin.post('/api/setup', { setupCode: env.setupCode!, calendarName: 'A', displayName: 'Admin', username: 'admin', password: 'password123', ...extra });
+  return admin;
+}
+async function join(env: Env, by: Awaited<ReturnType<Env['client']>>, username: string, calendarId: number, permissions: string[], accept = true) {
+  const r = await by.post('/api/users', { displayName: username, username, calendarId, permissions });
+  const token = r.body.inviteUrl.split('/invite/')[1] as string;
+  const c = await env.client();
+  if (accept) await c.post(`/api/invites/${token}`, { password: 'password123', confirm: 'password123' });
+  return { client: c, id: r.body.user.id as number, token };
+}
+
+describe('R1 — a calendar owner cannot take over accounts outside their calendar', () => {
+  it('blocks adding by id and issuing links for people elsewhere', async () => {
+    const env = await startTestApp();
+    try {
+      const admin = await setup(env);
+      await admin.post('/api/calendars', { name: 'B' });
+      const { client: mallory } = await join(env, admin, 'mallory', 2, ROLES.owner.perms);
+      const victim = await join(env, admin, 'victim', 1, ROLES.editor.perms, false); // pending, in calendar A
+      // Full mode lets owners add existing people, but not take over their accounts:
+      expect((await mallory.put(`/api/calendars/2/members/${victim.id}`, { permissions: ['subscribe'] })).status).toBe(200);
+      expect((await mallory.post(`/api/calendars/2/members/${victim.id}/invite`)).status).toBe(403);
+      expect((await (await env.client()).get(`/api/invites/${victim.token}`)).status).toBe(200); // original link untouched
+      // Someone only in the owner's calendar: allowed.
+      const own = await join(env, mallory, 'newbie', 2, ROLES.viewer.perms, false);
+      expect((await mallory.post(`/api/calendars/2/members/${own.id}/invite`)).status).toBe(200);
+    } finally { await env.close(); }
+  });
+});
+
+describe('R2 — metadata mode really hides other calendars from the app admin', () => {
+  it('no feed links, feed settings or reset links for people in calendars the admin is not in', async () => {
+    const env = await startTestApp({ env: { APP_ADMIN_ACCESS: 'metadata' } });
+    try {
+      const admin = await setup(env);
+      await admin.post('/api/calendars', { name: 'Theirs' });
+      const { client: bob, id: bobId } = await join(env, admin, 'bob', 2, ROLES.owner.perms);
+      await admin.del('/api/calendars/2/members/1');
+      expect((await admin.get(`/api/users/${bobId}/subscription`)).status).toBe(403);
+      expect((await admin.put(`/api/users/${bobId}/feed-prefs`, { types: ['birthday'], alarm: 'none' })).status).toBe(403);
+      expect((await admin.post(`/api/users/${bobId}/invite`)).status).toBe(403);
+      expect((await admin.post(`/api/users/${bobId}/feed-reset`)).status).toBe(403);
+      const detail = (await admin.get(`/api/users/${bobId}`)).body;
+      expect(detail).toMatchObject({ links: null, inviteUrl: null });
+      // Owners can't pull strangers in by id here (it would reveal their name).
+      expect((await bob.put('/api/calendars/2/members/1', { permissions: ['view'] })).status).toBe(403);
+    } finally { await env.close(); }
+  });
+});
+
+describe('R3 — sign-ins can be ended from the server', () => {
+  it('a copied cookie stops working after sign-out, and "sign out everywhere" ends other devices', async () => {
+    const env = await startTestApp();
+    try {
+      await setup(env);
+      const c = await env.client();
+      const login = await c.post('/api/login', { username: 'admin', password: 'password123' });
+      const stolen = login.headers['set-cookie'] as unknown as string[];
+      const replay = () => request(env.app).get('/api/session').set('Cookie', stolen.map(s => s.split(';')[0]).join('; '));
+      expect((await replay()).body.user?.username).toBe('admin');
+      await c.post('/api/logout');
+      expect((await replay()).body.user).toBeNull();
+
+      const phone = await env.client();
+      await phone.post('/api/login', { username: 'admin', password: 'password123' });
+      const laptop = await env.client();
+      await laptop.post('/api/login', { username: 'admin', password: 'password123' });
+      expect((await laptop.post('/api/me/sign-out-others')).status).toBe(200);
+      expect((await phone.get('/api/session')).body.user).toBeNull();
+      expect((await laptop.get('/api/session')).body.user?.username).toBe('admin');
+      expect(await env.repos.users.count()).toBe(1);
+    } finally { await env.close(); }
+  });
+});
+
+describe('R4 — one client cannot keep the server busy', () => {
+  it('limits feed requests per address and reuses built feeds until something changes', async () => {
+    const env = await startTestApp();
+    try {
+      const admin = await setup(env);
+      const feed = (await admin.get('/api/me/subscription')).body.links.https.split('/feed/')[1];
+      const first = (await admin.agent.get(`/feed/${feed}`)).text;
+      expect((await admin.agent.get(`/feed/${feed}`)).text).toBe(first); // cached
+      await admin.post('/api/events', { calendarId: 1, type: 'birthday', name: 'New Person', dateEntry: 'gregorian', gDate: '1990-01-01', basis: 'gregorian' });
+      expect((await admin.agent.get(`/feed/${feed}`)).text).toContain('New Person'); // cache dropped on change
+      const statuses: number[] = [];
+      for (let i = 0; i < 60; i++) statuses.push((await admin.agent.get(`/feed/${feed}`)).status);
+      expect(statuses.at(-1)).toBe(429);
+    } finally { await env.close(); }
+  });
+});
+
+describe('R5 — password hashing', () => {
+  it('uses the stronger settings, and upgrades old hashes at sign-in', async () => {
+    const hash = await hashPassword('password123');
+    expect(hash).toMatch(/^scrypt\$N=16384,r=8,p=5\$/);
+    expect(await verifyPassword('password123', hash)).toBe(true);
+    expect(await verifyPassword('nope', hash)).toBe(false);
+    expect(await verifyPassword('x', 'scrypt$garbage')).toBe(false);
+
+    const env = await startTestApp();
+    try {
+      await setup(env);
+      // An old-style hash (N=16384, r=8, p=1), as earlier versions wrote.
+      const crypto = await import('node:crypto');
+      const salt = crypto.randomBytes(16);
+      const old = `scrypt$${salt.toString('base64')}$${crypto.scryptSync('password123', salt, 64, { N: 16384, r: 8, p: 1 }).toString('base64')}`;
+      const raw = new SQLite(path.join(env.dataDir, 'calendar.sqlite'));
+      raw.prepare("UPDATE users SET password_hash = ? WHERE username = 'admin'").run(old);
+      raw.close();
+      expect(needsRehash(old)).toBe(true);
+      const c = await env.client();
+      expect((await c.post('/api/login', { username: 'admin', password: 'password123' })).status).toBe(200);
+      expect(needsRehash((await env.repos.users.findByUsername('admin'))!.passwordHash)).toBe(false);
+    } finally { await env.close(); }
+  });
+});
+
+describe('R6–R8 — reset links, query strings, failed sign-ins', () => {
+  it('reset links last a day, odd query strings get a 400, failed sign-ins are logged', async () => {
+    let logs = '';
+    const stream = new Writable({ write(chunk, _enc, cb) { logs += chunk.toString(); cb(); } });
+    const env = await startTestApp({ env: { LOG_LEVEL: 'warn' }, logStream: stream });
+    try {
+      const admin = await setup(env);
+      const { id } = await join(env, admin, 'carol', 1, ROLES.viewer.perms); // has a password now
+      const reset = await admin.post(`/api/users/${id}/invite`);
+      const hours = (Date.parse(reset.body.user ? (await env.repos.users.findById(id))!.inviteExpires! : '') - Date.now()) / 3_600_000;
+      expect(hours).toBeGreaterThan(23);
+      expect(hours).toBeLessThanOrEqual(24);
+      const fresh = await admin.post('/api/users', { displayName: 'Dan', username: 'dan', calendarId: 1, permissions: ['view'] });
+      expect((Date.parse(fresh.body.inviteExpires) - Date.now()) / 86_400_000).toBeGreaterThan(13);
+
+      expect((await admin.get('/api/events?type=a&type=b')).status).toBe(400);
+      expect((await admin.get('/api/events?type=nonsense')).status).toBe(400);
+      expect((await admin.get('/api/activity?page=1&page=2')).status).toBe(400);
+      expect((await admin.get('/api/events?type=birthday&q=x')).status).toBe(200);
+
+      await (await env.client()).post('/api/login', { username: 'carol', password: 'wrong-password' });
+      expect(logs).toContain('Failed sign-in');
+      expect(logs).toContain('"username":"carol"');
+      expect(logs).not.toContain('wrong-password');
+    } finally { await env.close(); }
+  });
+});
+
+describe('Behind Cloudflare — CLIENT_IP_HEADER', () => {
+  it('limits by the visitor address Cloudflare reports, not a forged X-Forwarded-For', async () => {
+    const env = await startTestApp({ env: { TRUST_PROXY: '1', CLIENT_IP_HEADER: 'cf-connecting-ip' } });
+    try {
+      const c = await env.client();
+      const token = (await c.get('/api/session')).body.csrfToken as string;
+      const attempt = (ip: string, i: number) => c.agent.post('/api/login').set('x-csrf-token', token)
+        .set('CF-Connecting-IP', ip).set('X-Forwarded-For', `6.6.6.${i}`).send({ username: 'x', password: 'y' });
+      const statuses: number[] = [];
+      for (let i = 0; i < 21; i++) statuses.push((await attempt('203.0.113.5', i)).status);
+      expect(statuses.at(-1)).toBe(429);
+      expect((await attempt('198.51.100.7', 99)).status).toBe(400); // a different visitor is unaffected
+    } finally { await env.close(); }
+  });
+});

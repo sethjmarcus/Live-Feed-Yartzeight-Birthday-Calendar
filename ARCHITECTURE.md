@@ -28,7 +28,7 @@ server/
   app.ts                     Composition root: builds and wires everything
   config.ts                  Environment settings
   db/                        better-sqlite3 + Kysely, migrations, Unit of Work, v1 import
-  http/                      Security (helmet, sessions, CSRF, rate limits), guards, errors
+  http/                      Security (helmet, CSRF, rate limits), server-side sessions, guards, errors
   features/                  One folder per feature:
     auth/                      session, setup, sign-in, invites
     calendars/                 repository · service · routes (calendars and their members)
