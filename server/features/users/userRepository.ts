@@ -1,9 +1,11 @@
 import type { Selectable } from 'kysely';
 import type { Executor } from '../../db/database.js';
 import type { UsersTable } from '../../db/schema.js';
-import { PERMISSION_KEYS, type Permission } from '../../../shared/permissions.js';
 import type { FeedPrefs } from '../../../shared/schemas.js';
+import type { MembershipDTO } from '../../../shared/api.js';
+import type { CalendarAccess } from '../../../shared/permissions.js';
 import type { TokenVault } from '../../lib/tokens.js';
+import { CalendarRepository } from '../calendars/calendarRepository.js';
 
 export interface User {
   id: number;
@@ -12,7 +14,10 @@ export interface User {
   passwordHash: string | null;
   sessionVersion: number;
   active: boolean;
-  permissions: Permission[];
+  /** Runs the site: accounts, calendars, settings. */
+  appAdmin: boolean;
+  /** Read-only here; changed through CalendarRepository. */
+  memberships: MembershipDTO[];
   feedToken: string;
   feedPrefs: FeedPrefs;
   inviteToken: string | null;
@@ -22,7 +27,10 @@ export interface User {
   lastFeedFetch: string | null;
   lastFeedAgent: string | null;
 }
-export type NewUser = Omit<User, 'id'> & { id?: number };
+export type NewUser = Omit<User, 'id' | 'memberships'> & { id?: number };
+
+/** A signed-in user plus what they may do in each calendar (see resolveAccess). */
+export type Actor = User & { calendars: CalendarAccess[] };
 
 /**
  * Feed and invite tokens are never stored in plain text: the database holds a keyed
@@ -30,18 +38,22 @@ export type NewUser = Omit<User, 'id'> & { id?: number };
  * repository, User objects carry the plain token as usual.
  */
 export class UserRepository {
-  constructor(private db: Executor, private vault: TokenVault) {}
+  private calendars: CalendarRepository;
 
-  private async toUser(row: Selectable<UsersTable> | undefined, perms?: string[]): Promise<User | null> {
+  constructor(private db: Executor, private vault: TokenVault) {
+    this.calendars = new CalendarRepository(db);
+  }
+
+  private async toUser(row: Selectable<UsersTable> | undefined, memberships?: MembershipDTO[]): Promise<User | null> {
     if (!row) return null;
-    const permissions = perms ?? (await this.db.selectFrom('userPermissions').select('permission').where('userId', '=', row.id).execute()).map(r => r.permission);
-    const { feedTypes, feedAlarm, active, feedToken: _hash, feedTokenEnc, inviteToken: _ihash, inviteTokenEnc, tokenFormat: _f, ...rest } = row;
+    const { feedTypes, feedAlarm, active, appAdmin, feedToken: _hash, feedTokenEnc, inviteToken: _ihash, inviteTokenEnc, tokenFormat: _f, ...rest } = row;
     return {
       ...rest,
       feedToken: feedTokenEnc ? this.vault.open(feedTokenEnc) : '',
       inviteToken: inviteTokenEnc ? this.vault.open(inviteTokenEnc) : null,
       active: !!active,
-      permissions: PERMISSION_KEYS.filter(k => permissions.includes(k)),
+      appAdmin: !!appAdmin,
+      memberships: memberships ?? await this.calendars.membershipsOf(row.id),
       feedPrefs: { types: JSON.parse(feedTypes), alarm: feedAlarm as FeedPrefs['alarm'] },
     };
   }
@@ -55,12 +67,14 @@ export class UserRepository {
   findByInviteToken(token: string) { return this.findBy('inviteToken', this.vault.lookup(token)); }
 
   async list(): Promise<User[]> {
-    const perms = new Map<number, string[]>();
-    for (const r of await this.db.selectFrom('userPermissions').selectAll().execute()) {
-      perms.set(r.userId, [...(perms.get(r.userId) || []), r.permission]);
-    }
+    const memberships = await this.calendars.allMemberships();
     const rows = await this.db.selectFrom('users').selectAll().orderBy('active', 'desc').orderBy('displayName').execute();
-    return Promise.all(rows.map(r => this.toUser(r, perms.get(r.id) || []))) as Promise<User[]>;
+    return Promise.all(rows.map(r => this.toUser(r, memberships.get(r.id) ?? []))) as Promise<User[]>;
+  }
+
+  /** Everyone, names only — for picking people to add to a calendar. */
+  async directory(): Promise<{ id: number; displayName: string; username: string }[]> {
+    return this.db.selectFrom('users').select(['id', 'displayName', 'username']).where('active', '=', 1).orderBy('displayName').execute();
   }
 
   async count(): Promise<number> {
@@ -68,17 +82,20 @@ export class UserRepository {
     return Number(r.n);
   }
 
-  async countActiveAdmins(excludingId = 0): Promise<number> {
-    const r = await this.db.selectFrom('users').innerJoin('userPermissions', 'userPermissions.userId', 'users.id')
-      .select(eb => eb.fn.countAll<number>().as('n'))
-      .where('userPermissions.permission', '=', 'admin').where('users.active', '=', 1).where('users.id', '!=', excludingId)
+  async countActiveAppAdmins(excludingId = 0): Promise<number> {
+    const r = await this.db.selectFrom('users').select(eb => eb.fn.countAll<number>().as('n'))
+      .where('appAdmin', '=', 1).where('active', '=', 1).where('id', '!=', excludingId)
       .executeTakeFirstOrThrow();
     return Number(r.n);
   }
 
-  async names(): Promise<Record<number, string>> {
-    const rows = await this.db.selectFrom('users').select(['id', 'displayName']).execute();
-    return Object.fromEntries(rows.map(r => [r.id, r.displayName]));
+  /** id → display name; only for the given ids when they're passed. */
+  async names(ids?: (number | null | undefined)[]): Promise<Record<number, string>> {
+    const wanted = ids && [...new Set(ids.filter((i): i is number => !!i))];
+    if (wanted && !wanted.length) return {};
+    let q = this.db.selectFrom('users').select(['id', 'displayName']);
+    if (wanted) q = q.where('id', 'in', wanted);
+    return Object.fromEntries((await q.execute()).map(r => [r.id, r.displayName]));
   }
 
   private columns(u: NewUser) {
@@ -88,6 +105,7 @@ export class UserRepository {
       passwordHash: u.passwordHash,
       sessionVersion: u.sessionVersion,
       active: u.active ? 1 : 0,
+      appAdmin: u.appAdmin ? 1 : 0,
       feedToken: this.vault.lookup(u.feedToken),
       feedTokenEnc: this.vault.seal(u.feedToken),
       feedTypes: JSON.stringify(u.feedPrefs.types),
@@ -103,19 +121,16 @@ export class UserRepository {
     };
   }
 
-  /** Must run inside a transaction (user row + permission rows). */
   async create(u: NewUser): Promise<User> {
     const { id } = await this.db.insertInto('users')
       .values({ ...(u.id ? { id: u.id } : {}), ...this.columns(u) })
       .returning('id').executeTakeFirstOrThrow();
-    await this.writePermissions(id, u.permissions);
     return (await this.findById(id))!;
   }
 
-  /** Must run inside a transaction (user row + permission rows). */
+  /** Saves the account itself; calendar memberships are changed through CalendarRepository. */
   async update(u: User): Promise<User> {
     await this.db.updateTable('users').set(this.columns(u)).where('id', '=', u.id).execute();
-    await this.writePermissions(u.id, u.permissions);
     return u;
   }
 
@@ -141,10 +156,4 @@ export class UserRepository {
     return rows.length;
   }
 
-  private async writePermissions(userId: number, permissions: Permission[]) {
-    await this.db.deleteFrom('userPermissions').where('userId', '=', userId).execute();
-    if (permissions.length) {
-      await this.db.insertInto('userPermissions').values(permissions.map(permission => ({ userId, permission }))).execute();
-    }
-  }
 }

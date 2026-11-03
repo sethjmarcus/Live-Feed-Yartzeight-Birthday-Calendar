@@ -19,19 +19,32 @@ export interface UsersTable {
   inviteTokenEnc: string | null;
   inviteExpires: string | null;
   tokenFormat: number;          // 0 = legacy plain text, 1 = protected
+  appAdmin: number;             // 0 / 1 — runs the site (accounts, calendars, settings)
   createdAt: string;
   lastLogin: string | null;
   lastFeedFetch: string | null;
   lastFeedAgent: string | null;
 }
 
-export interface UserPermissionsTable {
+export interface CalendarsTable {
+  id: Generated<number>;
+  name: string;
+  createdAt: string;
+  createdBy: number | null;
+}
+
+export interface CalendarMembersTable {
+  calendarId: number;
   userId: number;
-  permission: string;
+  permissions: string;          // JSON array of Permission
+  inFeed: number;               // 0 / 1 — include in this person's phone feed
+  addedAt: string;
+  addedBy: number | null;
 }
 
 export interface EventsTable {
   id: Generated<number>;
+  calendarId: number;
   type: string;
   name: string;
   title: string;
@@ -58,6 +71,7 @@ export interface AuditLogTable {
   at: string;
   actorId: number | null;
   action: string;
+  calendarId: number | null;
   eventId: number | null;
   targetUserId: number | null;
   label: string | null;
@@ -70,6 +84,15 @@ export interface SettingsTable {
   value: string;                // JSON
 }
 
+export interface SessionsTable {
+  id: string;                   // HMAC of the session token in the cookie
+  userId: number;
+  sessionVersion: number;       // must match users.session_version
+  createdAt: string;
+  lastSeenAt: string;
+  userAgent: string | null;
+}
+
 export interface HebcalCacheTable {
   key: string;
   fetchedAt: string;
@@ -78,9 +101,11 @@ export interface HebcalCacheTable {
 
 export interface DB {
   users: UsersTable;
-  userPermissions: UserPermissionsTable;
+  calendars: CalendarsTable;
+  calendarMembers: CalendarMembersTable;
   events: EventsTable;
   auditLog: AuditLogTable;
   settings: SettingsTable;
   hebcalCache: HebcalCacheTable;
+  sessions: SessionsTable;
 }

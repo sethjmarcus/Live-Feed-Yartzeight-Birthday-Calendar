@@ -17,13 +17,16 @@ import { UserService } from './features/users/userService.js';
 import { EventService } from './features/events/eventService.js';
 import { FeedService } from './features/feed/feedService.js';
 import { SettingsService } from './features/settings/settingsService.js';
+import { CalendarService } from './features/calendars/calendarService.js';
+import { calendarRoutes } from './features/calendars/calendarRoutes.js';
 import { authRoutes } from './features/auth/authRoutes.js';
 import { eventRoutes } from './features/events/eventRoutes.js';
 import { userRoutes } from './features/users/userRoutes.js';
 import { settingsRoutes } from './features/settings/settingsRoutes.js';
 import { feedRoutes, publicSubscribeRoutes } from './features/feed/feedRoutes.js';
-import { createAuthRateLimit, createCsrf, installSecurity, loadSecret } from './http/security.js';
-import { errorHandler, loadUser } from './http/middleware.js';
+import { createAuthRateLimit, createCsrf, createRateLimit, installSecurity, loadSecret } from './http/security.js';
+import { errorHandler } from './http/middleware.js';
+import { SessionStore } from './http/sessions.js';
 import { NotFoundError } from './http/errors.js';
 import { TokenVault } from './lib/tokens.js';
 import { redactUrl, REDACTED_LOG_PATHS } from './http/redact.js';
@@ -53,6 +56,8 @@ export async function createApp(config: Config, opts: { fetch?: typeof globalThi
     baseUrl: config.hebcalApiBase, refreshHours: config.hebcalRefreshHours, fetch: opts.fetch, log,
   });
   const users = new UserService(uow, () => setupCode);
+  const calendars = new CalendarService(uow, config.appAdminAccess);
+  const sessions = new SessionStore(db, vault);
   const events = new EventService(uow);
   const feed = new FeedService(uow, hebcal);
   const settings = new SettingsService(uow, hebcal, sqlite, config.dataDir, log);
@@ -71,14 +76,16 @@ export async function createApp(config: Config, opts: { fetch?: typeof globalThi
   const { doubleCsrfProtection, generateCsrfToken } = createCsrf(secret, config);
 
   app.get('/healthz', (_req, res) => { res.type('text/plain').send('ok'); });
+  app.use('/feed', createRateLimit(60));
   app.use(feedRoutes({ feed, users, settings }));
 
   const api = Router();
-  api.use(express.json({ limit: '200kb' }), doubleCsrfProtection, loadUser(uow.repos.users));
-  api.use(authRoutes({ users, settings, csrfToken: (req, res) => generateCsrfToken(req, res), authRateLimit: createAuthRateLimit() }));
+  api.use(createRateLimit(300), express.json({ limit: '200kb' }), doubleCsrfProtection, sessions.loadUser(uow.repos.users, u => calendars.actorFor(u)));
+  api.use(authRoutes({ users, settings, calendars, sessions, log, csrfToken: (req, res) => generateCsrfToken(req, res), authRateLimit: createAuthRateLimit() }));
   api.use(eventRoutes({ events, feed, users }));
-  api.use(userRoutes({ users, settings, events: uow.repos.events, config }));
-  api.use(settingsRoutes({ settings, users, hebcal, config }));
+  api.use(calendarRoutes({ calendars }));
+  api.use(userRoutes({ users, settings, events: uow.repos.events, calendars: uow.repos.calendars, sessions, config }));
+  api.use(settingsRoutes({ settings, users, calendars: uow.repos.calendars, hebcal, config }));
   api.use(publicSubscribeRoutes({ users, settings, config }));
   api.use(() => { throw new NotFoundError('No such API endpoint.'); });
   app.use('/api', api);
@@ -105,12 +112,13 @@ export async function createApp(config: Config, opts: { fetch?: typeof globalThi
     log,
     /** The first-run setup code (null once an admin exists). */
     get setupCode() { return setupCode; },
-    services: { users, events, feed, settings, hebcal },
+    services: { users, calendars, events, feed, settings, hebcal, sessions },
     repos: uow.repos,
     start() {
       hebcal.start();
-      void settings.dailyBackup();
-      backupTimer = setInterval(() => void settings.dailyBackup(), 6 * 3_600_000);
+      const daily = () => { void settings.dailyBackup(); void sessions.prune().catch(err => log.error(err, 'Session clean-up failed')); };
+      daily();
+      backupTimer = setInterval(daily, 6 * 3_600_000);
       backupTimer.unref();
     },
     async stop() {

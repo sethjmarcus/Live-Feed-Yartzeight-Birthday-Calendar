@@ -28,7 +28,8 @@ describe('full workflow', () => {
     expect(res.status).toBe(201);
     const s = (await admin.get('/api/session')).body;
     expect(s.user).toMatchObject({ username: 'seth', displayName: 'Seth' });
-    expect(s.calendarName).toBe('Cohen Family');
+    expect(s.siteName).toBe('Cohen Family');
+    expect(s.user).toMatchObject({ appAdmin: true, calendars: [{ id: 1, name: 'Cohen Family', member: true }] });
     expect((await admin.post('/api/setup', { calendarName: 'x', displayName: 'x', username: 'xx', password: 'password123' })).status).toBe(403);
   });
 
@@ -38,21 +39,21 @@ describe('full workflow', () => {
   });
 
   it('adds events in both calendars and validates input', async () => {
-    let r = await admin.post('/api/events', { type: 'yahrzeit', name: 'Grandpa Avraham', hebrewName: 'אברהם בן יצחק', dateEntry: 'hebrew', hDay: 30, hMonth: 8, hYear: 5740, basis: 'hebrew' });
+    let r = await admin.post('/api/events', { calendarId: 1, type: 'yahrzeit', name: 'Grandpa Avraham', hebrewName: 'אברהם בן יצחק', dateEntry: 'hebrew', hDay: 30, hMonth: 8, hYear: 5740, basis: 'hebrew' });
     expect(r.status).toBe(201);
     expect(r.body.event).toMatchObject({ gDate: '1979-11-20', hYear: 5740 });
-    r = await admin.post('/api/events', { type: 'birthday', name: 'Sarah', dateEntry: 'gregorian', gDate: '1990-03-10', afterSunset: true, basis: 'both' });
+    r = await admin.post('/api/events', { calendarId: 1, type: 'birthday', name: 'Sarah', dateEntry: 'gregorian', gDate: '1990-03-10', afterSunset: true, basis: 'both' });
     expect(r.body.event).toMatchObject({ hYear: 5750, hMonth: 12, hDay: 14 });
-    await admin.post('/api/events', { type: 'other', title: 'Family reunion', dateEntry: 'gregorian', gDate: '2020-12-01', basis: 'gregorian' });
-    r = await admin.post('/api/events', { type: 'yahrzeit', name: 'X', dateEntry: 'hebrew', hDay: 5, hMonth: 13, hYear: 5785, basis: 'hebrew' });
+    await admin.post('/api/events', { calendarId: 1, type: 'other', title: 'Family reunion', dateEntry: 'gregorian', gDate: '2020-12-01', basis: 'gregorian' });
+    r = await admin.post('/api/events', { calendarId: 1, type: 'yahrzeit', name: 'X', dateEntry: 'hebrew', hDay: 5, hMonth: 13, hYear: 5785, basis: 'hebrew' });
     expect(r.status).toBe(400);
     expect(r.body.fields.hDay).toMatch(/not a leap year/);
-    r = await admin.post('/api/events', { type: 'birthday', name: '', dateEntry: 'gregorian', gDate: '2020-02-30', basis: 'gregorian' });
+    r = await admin.post('/api/events', { calendarId: 1, type: 'birthday', name: '', dateEntry: 'gregorian', gDate: '2020-02-30', basis: 'gregorian' });
     expect(r.body.fields).toMatchObject({ name: 'Enter a name.', gDate: 'Enter a valid date.' });
   });
 
   it('invites a contributor; the invite is single-use', async () => {
-    let r = await admin.post('/api/users', { displayName: 'Miriam', username: 'Miriam', permissions: ['subscribe', 'view', 'add', 'editOwn', 'deleteOwn'] });
+    let r = await admin.post('/api/users', { displayName: 'Miriam', username: 'Miriam', calendarId: 1, permissions: ['subscribe', 'view', 'add', 'editOwn', 'deleteOwn'] });
     expect(r.status).toBe(201);
     miriamId = r.body.user.id;
     r = await admin.get(`/api/users/${miriamId}`);
@@ -70,7 +71,7 @@ describe('full workflow', () => {
 
   it('enforces permissions', async () => {
     expect((await miriam.get('/api/me/subscription')).body.links.webcal).toMatch(/^webcal:\/\//);
-    const r = await miriam.post('/api/events', { type: 'birthday', name: 'Noa', dateEntry: 'gregorian', gDate: '2015-02-28', basis: 'hebrew' });
+    const r = await miriam.post('/api/events', { calendarId: 1, type: 'birthday', name: 'Noa', dateEntry: 'gregorian', gDate: '2015-02-28', basis: 'hebrew' });
     expect(r.status).toBe(201);
     expect((await miriam.get('/api/events/1')).status).toBe(403);
     expect((await miriam.get('/api/events/4')).status).toBe(200);
@@ -84,7 +85,7 @@ describe('full workflow', () => {
     let r = await admin.get('/api/events');
     const noa = r.body.events.find((e: { name: string }) => e.name === 'Noa');
     expect(r.body.names[noa.createdBy]).toBe('Miriam');
-    r = await admin.put('/api/events/4', { type: 'birthday', name: 'Noa Levi', dateEntry: 'gregorian', gDate: '2015-02-28', basis: 'hebrew' });
+    r = await admin.put('/api/events/4', { calendarId: 1, type: 'birthday', name: 'Noa Levi', dateEntry: 'gregorian', gDate: '2015-02-28', basis: 'hebrew' });
     expect(r.body.changed).toBe(true);
     r = await admin.get('/api/events/4/history');
     const actions = r.body.entries.map((e: { action: string; actorId: number }) => `${r.body.names[e.actorId]}:${e.action}`);
@@ -101,9 +102,12 @@ describe('full workflow', () => {
     expect(r.body.entries.map((e: { action: string }) => e.action)).toEqual(expect.arrayContaining(['event.create', 'event.update', 'event.delete', 'event.restore']));
   });
 
-  it('protects the last admin', async () => {
-    const r = await admin.put('/api/users/1', { displayName: 'Seth', username: 'seth', permissions: ['view'], active: true });
+  it('protects the last app admin and the last calendar manager', async () => {
+    let r = await admin.put('/api/users/1', { displayName: 'Seth', username: 'seth', active: true, appAdmin: false });
     expect(r.status).toBe(400);
+    r = await admin.put('/api/calendars/1/members/1', { permissions: ['subscribe', 'view'] });
+    expect(r.status).toBe(400);
+    expect(r.body.error).toMatch(/at least one active member who can manage/);
   });
 
   it('serves a correct feed (all-day dates right in Israel time)', async () => {
@@ -121,7 +125,7 @@ describe('full workflow', () => {
 
   it('adds Hebcal holidays and candle-lighting when opted in', async () => {
     let r = await admin.put('/api/settings', {
-      calendarName: 'Cohen Family', yearsAhead: 10, yearsBehind: 1,
+      siteName: 'Cohen Family', yearsAhead: 10, yearsBehind: 1,
       hebcalGeonameId: '281184', hebcalIsrael: true, hebcalCandleMinutes: 40, hebcalHolidays: ['major', 'roshchodesh'],
     });
     expect(r.body.changed).toBe(true);
@@ -177,7 +181,10 @@ describe('upgrade from version 1', () => {
       expect(await env.repos.users.count()).toBe(2);
       expect((await env.repos.events.listActive()).length).toBe(5);
       const seth = (await env.repos.users.findByUsername('seth'))!;
-      expect(seth.permissions).toContain('admin');
+      expect(seth.appAdmin).toBe(true);
+      expect(seth.memberships).toMatchObject([{ calendarId: 1, inFeed: true }]);
+      expect(seth.memberships[0].permissions).toContain('manage');
+      expect((await env.repos.events.listActive()).every(e => e.calendarId === 1)).toBe(true);
       const c = await env.client();
       expect((await c.post('/api/login', { username: 'seth', password: 'password123' })).status).toBe(200);
       expect((await c.agent.get(`/feed/${seth.feedToken}.ics`)).status).toBe(200);

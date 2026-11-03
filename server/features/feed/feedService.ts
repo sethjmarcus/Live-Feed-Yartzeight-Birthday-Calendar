@@ -3,7 +3,9 @@
  */
 import ical, { ICalAlarmType, ICalCalendarMethod, ICalEventTransparency } from 'ical-generator';
 import type { UnitOfWork } from '../../db/unitOfWork.js';
-import type { User } from '../users/userRepository.js';
+import type { Actor, User } from '../users/userRepository.js';
+import { feedCalendars } from '../users/userService.js';
+import { calendarsWhere } from '../../../shared/permissions.js';
 import type { HebcalGateway } from '../hebcal/hebcalGateway.js';
 import { ATTRIBUTION } from '../hebcal/hebcalGateway.js';
 import * as cal from '../../../shared/hebrewCalendar.js';
@@ -24,26 +26,54 @@ const ALARMS: Record<FeedPrefs['alarm'], number[]> = {
 /** Yahrzeits begin the evening before: their "day before" reminder fires at 16:00. */
 const YAHRZEIT_EVE = 8 * HOUR;
 
+/** How long a built feed is reused when nothing has changed (holiday data refreshes in the background). */
+const CACHE_MS = 10 * 60_000;
+
 export class FeedService {
+  /** userId → last feed built, with the data version and day it was built for. */
+  private cache = new Map<number, { body: string; version: number; today: number; at: number }>();
+
   constructor(private uow: UnitOfWork, private hebcal: HebcalGateway) {}
 
+  /**
+   * The person's feed, reused while nothing has changed — phones poll often, and building
+   * years of events each time would let one client keep the server busy.
+   */
+  async feedFor(user: User, today = cal.todayAbs()): Promise<string> {
+    const hit = this.cache.get(user.id);
+    const fresh = hit && hit.version === this.uow.version && hit.today === today && Date.now() - hit.at < CACHE_MS;
+    if (fresh) return hit.body;
+    const version = this.uow.version;
+    const body = await this.buildFeed(user, today);
+    this.cache.set(user.id, { body, version, today, at: Date.now() });
+    return body;
+  }
+
+  /**
+   * One feed per person, covering every calendar they subscribe to — so a calendar they
+   * join later shows up on their phone without setting anything up again.
+   */
   async buildFeed(user: User, today = cal.todayAbs()): Promise<string> {
     const s = await this.uow.repos.settings.get();
     const from = today - 366 * s.yearsBehind - 1;
     const to = today + 366 * s.yearsAhead;
     const types = new Set(user.feedPrefs.types);
     const extras = (['holidays', 'candles'] as HebcalFeedType[]).filter(k => types.has(k));
+    const sources = feedCalendars(user);
+    const calendarName = new Map(sources.map(m => [m.calendarId, m.calendarName]));
+    const several = sources.length > 1;
 
     const calendar = ical({
-      name: s.calendarName,
+      name: sources.length === 1 ? sources[0].calendarName : s.siteName,
       description: 'Birthdays, anniversaries and yahrzeits with Hebrew and English dates' + (extras.length ? `. ${ATTRIBUTION}` : ''),
       prodId: { company: 'yahrzeit-feed-calendar', product: 'feed', language: 'EN' },
       method: ICalCalendarMethod.PUBLISH,
       ttl: HOUR, // ask clients to refresh hourly
     });
 
-    for (const ev of await this.uow.repos.events.listActive()) {
+    for (const ev of await this.uow.repos.events.listActive([...calendarName.keys()])) {
       if (!types.has(ev.type)) continue;
+      const source = calendarName.get(ev.calendarId)!;
       for (const occ of occurrencesBetween(ev, from, to)) {
         const title = occurrenceTitle(ev, occ);
         calendar.createEvent({
@@ -51,8 +81,8 @@ export class FeedService {
           allDay: true,
           start: utcMidnight(occ.iso),
           summary: title,
-          description: occurrenceDetails(ev, occ),
-          categories: [{ name: EVENT_TYPES[ev.type].label }],
+          description: occurrenceDetails(ev, occ) + (several ? `\nCalendar: ${source}` : ''),
+          categories: [{ name: EVENT_TYPES[ev.type].label }, ...(several ? [{ name: source }] : [])],
           stamp: new Date(ev.updatedAt),
           lastModified: new Date(ev.updatedAt),
           sequence: ev.revision,
@@ -75,13 +105,15 @@ export class FeedService {
     return calendar.toString();
   }
 
-  async upcoming(user: User, days: number, today = cal.todayAbs()): Promise<UpcomingItem[]> {
+  /** What's coming up in the calendars the user can view (or just one of them). */
+  async upcoming(user: Actor, days: number, calendarId: number | null = null, today = cal.todayAbs()): Promise<UpcomingItem[]> {
     const to = today + days;
     const items: UpcomingItem[] = [];
-    for (const ev of await this.uow.repos.events.listActive()) {
+    const ids = calendarsWhere(user, 'view').map(c => c.id).filter(id => !calendarId || id === calendarId);
+    for (const ev of await this.uow.repos.events.listActive(ids)) {
       for (const occ of occurrencesBetween(ev, today, to)) {
         items.push({
-          kind: 'event', type: ev.type, eventId: ev.id, iso: occ.iso, abs: occ.abs, hebrew: occ.hebrew,
+          kind: 'event', type: ev.type, eventId: ev.id, calendarId: ev.calendarId, iso: occ.iso, abs: occ.abs, hebrew: occ.hebrew,
           title: occurrenceTitle(ev, occ),
           eveningBefore: eveningBefore(ev, occ),
         });

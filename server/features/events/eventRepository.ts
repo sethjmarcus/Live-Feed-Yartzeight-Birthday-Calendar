@@ -23,10 +23,13 @@ function toRow(ev: NewCalendarEvent) {
 }
 
 export interface EventSearch {
+  /** Only these calendars. */
+  calendarIds: number[];
   text?: string;
   type?: EventType | '';
   createdBy?: number | null;
-  includeDeleted?: boolean;
+  /** Also return deleted events of these calendars. */
+  deletedIn?: number[];
 }
 
 export class EventRepository {
@@ -36,14 +39,21 @@ export class EventRepository {
     return toEvent(await this.db.selectFrom('events').selectAll().where('id', '=', id).executeTakeFirst());
   }
 
-  /** Events that are not deleted — what goes into feeds. */
-  async listActive(): Promise<CalendarEvent[]> {
-    return (await this.db.selectFrom('events').selectAll().where('deletedAt', 'is', null).execute()).map(r => toEvent(r)!);
+  /** Events that are not deleted — what goes into feeds. Every calendar unless `calendarIds` is given. */
+  async listActive(calendarIds?: number[]): Promise<CalendarEvent[]> {
+    if (calendarIds && !calendarIds.length) return [];
+    let q = this.db.selectFrom('events').selectAll().where('deletedAt', 'is', null);
+    if (calendarIds) q = q.where('calendarId', 'in', calendarIds);
+    return (await q.execute()).map(r => toEvent(r)!);
   }
 
-  async search({ text, type, createdBy, includeDeleted }: EventSearch = {}): Promise<CalendarEvent[]> {
-    let q = this.db.selectFrom('events').selectAll();
-    if (!includeDeleted) q = q.where('deletedAt', 'is', null);
+  async search({ calendarIds, text, type, createdBy, deletedIn = [] }: EventSearch): Promise<CalendarEvent[]> {
+    if (!calendarIds.length) return [];
+    let q = this.db.selectFrom('events').selectAll().where('calendarId', 'in', calendarIds);
+    q = q.where(eb => eb.or([
+      eb('deletedAt', 'is', null),
+      ...(deletedIn.length ? [eb('calendarId', 'in', deletedIn)] : []),
+    ]));
     if (type) q = q.where('type', '=', type);
     if (createdBy) q = q.where('createdBy', '=', createdBy);
     if (text) {
@@ -54,9 +64,11 @@ export class EventRepository {
     return rows.map(r => toEvent(r)!).sort((a, b) => sortName(a).localeCompare(sortName(b)));
   }
 
-  async countByCreator(): Promise<Record<number, number>> {
-    const rows = await this.db.selectFrom('events').select(['createdBy', eb => eb.fn.countAll<number>().as('n')])
-      .where('deletedAt', 'is', null).groupBy('createdBy').execute();
+  async countByCreator(calendarIds?: number[]): Promise<Record<number, number>> {
+    if (calendarIds && !calendarIds.length) return {};
+    let q = this.db.selectFrom('events').select(['createdBy', eb => eb.fn.countAll<number>().as('n')]).where('deletedAt', 'is', null);
+    if (calendarIds) q = q.where('calendarId', 'in', calendarIds);
+    const rows = await q.groupBy('createdBy').execute();
     return Object.fromEntries(rows.filter(r => r.createdBy !== null).map(r => [r.createdBy, Number(r.n)]));
   }
 

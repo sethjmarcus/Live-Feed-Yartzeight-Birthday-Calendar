@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import * as cal from '../shared/hebrewCalendar.js';
 import { occurrencesBetween, occurrenceTitle, occurrenceDetails, type EventCore } from '../shared/occurrences.js';
 import { eventInputSchema, normalizeEvent } from '../shared/schemas.js';
-import { can, canEditEvent, presetName, PRESETS } from '../shared/permissions.js';
+import { can, canEditEvent, canSomewhere, resolveAccess, roleName, ROLES } from '../shared/permissions.js';
 
 const yearRange = (y: number): [number, number] => [cal.absFromIso(`${y}-01-01`), cal.absFromIso(`${y}-12-31`)];
 const ev = (e: Partial<EventCore>): EventCore => ({ type: 'birthday', name: 'X', title: '', hebrewName: '', notes: '', basis: 'hebrew', afterSunset: false, gDate: '2000-01-01', hYear: 5760, hMonth: 10, hDay: 23, ...e });
@@ -63,7 +63,7 @@ describe('occurrences', () => {
 
 describe('shared validation + normalisation', () => {
   it('fills in the Gregorian date for a Hebrew entry', () => {
-    const v = eventInputSchema.parse({ type: 'yahrzeit', name: 'A', dateEntry: 'hebrew', hDay: '15', hMonth: '1', hYear: '5786', basis: 'hebrew' });
+    const v = eventInputSchema.parse({ calendarId: 1, type: 'yahrzeit', name: 'A', dateEntry: 'hebrew', hDay: '15', hMonth: '1', hYear: '5786', basis: 'hebrew' });
     expect(normalizeEvent(v)).toMatchObject({ gDate: '2026-04-02', hYear: 5786, hMonth: 1, hDay: 15 });
   });
   it('requires a title for "other"', () => {
@@ -73,15 +73,30 @@ describe('shared validation + normalisation', () => {
 });
 
 describe('permissions policy', () => {
-  const contributor = { id: 2, active: true, permissions: PRESETS.contributor.perms };
-  it('lets contributors edit only their own events', () => {
-    expect(canEditEvent(contributor, { createdBy: 2 })).toBe(true);
-    expect(canEditEvent(contributor, { createdBy: 1 })).toBe(false);
-    expect(canEditEvent(contributor, { createdBy: 2, deletedAt: '2026-01-01' })).toBe(false);
+  const access = (id: number, perms: (typeof ROLES)['owner']['perms']) => ({ id, name: `C${id}`, permissions: perms, member: true, inFeed: true });
+  const contributor = { id: 2, active: true, appAdmin: false, calendars: [access(1, ROLES.contributor.perms)] };
+  it('lets contributors edit only their own events, and only in their calendar', () => {
+    expect(canEditEvent(contributor, { calendarId: 1, createdBy: 2 })).toBe(true);
+    expect(canEditEvent(contributor, { calendarId: 1, createdBy: 1 })).toBe(false);
+    expect(canEditEvent(contributor, { calendarId: 1, createdBy: 2, deletedAt: '2026-01-01' })).toBe(false);
+    expect(canEditEvent(contributor, { calendarId: 7, createdBy: 2 })).toBe(false);
   });
-  it('admin implies everything; disabled users get nothing', () => {
-    expect(can({ id: 1, active: true, permissions: ['admin'] }, 'deleteAny')).toBe(true);
-    expect(can({ id: 1, active: false, permissions: ['admin'] }, 'view')).toBe(false);
-    expect(presetName(PRESETS.editor.perms)).toBe('Editor');
+  it('manage implies everything in that calendar; disabled users get nothing', () => {
+    const owner = { id: 1, active: true, appAdmin: false, calendars: [access(1, ['manage'])] };
+    expect(can(owner, 'deleteAny', 1)).toBe(true);
+    expect(can(owner, 'view', 2)).toBe(false);
+    expect(can({ ...owner, active: false }, 'view', 1)).toBe(false);
+    expect(canSomewhere(contributor, 'add')).toBe(true);
+    expect(roleName(ROLES.editor.perms)).toBe('Editor');
+    expect(roleName(['view', 'add'])).toBe('Custom');
+  });
+  it("app admins manage every calendar in 'full' mode, only their own in 'metadata' mode", () => {
+    const admin = { appAdmin: true, memberships: [{ calendarId: 1, calendarName: 'Ours', permissions: ROLES.viewer.perms, inFeed: true }] };
+    const all = [{ id: 1, name: 'Ours' }, { id: 2, name: 'Theirs' }];
+    const full = resolveAccess(admin, all, 'full');
+    expect(full.map(c => [c.id, c.member, c.permissions.includes('manage')])).toEqual([[1, true, true], [2, false, true]]);
+    const meta = resolveAccess(admin, all, 'metadata');
+    expect(meta.map(c => c.id)).toEqual([1]);
+    expect(meta[0].permissions).toEqual(ROLES.viewer.perms);
   });
 });

@@ -19,6 +19,10 @@ WorkingDirectory=%h/Documents/yarzeight_feed_calendar
 ExecStart=/bin/sh -c 'exec "$NODE" dist/server/index.js'
 Restart=on-failure
 RestartSec=5
+# Hardening: files the app creates (database, backups) are readable only by this user,
+# and the app can never gain extra privileges (e.g. through sudo).
+UMask=0077
+NoNewPrivileges=true
 
 [Install]
 WantedBy=default.target

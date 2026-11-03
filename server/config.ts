@@ -3,6 +3,7 @@
  */
 import fs from 'node:fs';
 import path from 'node:path';
+import type { AppAdminAccess } from '../shared/permissions.js';
 
 export interface Config {
   port: number;
@@ -21,6 +22,17 @@ export interface Config {
   hebcalApiBase: string;
   hebcalRefreshHours: number;
   logLevel: string;
+  /**
+   * What app admins see of calendars they aren't members of:
+   * 'full' = manage every calendar (one family); 'metadata' = names and counts only
+   * (several unrelated families on one server).
+   */
+  appAdminAccess: AppAdminAccess;
+  /**
+   * Take each visitor's address from this header instead (e.g. 'cf-connecting-ip' behind
+   * Cloudflare). Only safe when nothing but that proxy can reach the app (HOST=127.0.0.1).
+   */
+  clientIpHeader: string;
 }
 
 export function loadConfig(rootDir: string, env: NodeJS.ProcessEnv = process.env): Config {
@@ -36,6 +48,8 @@ export function loadConfig(rootDir: string, env: NodeJS.ProcessEnv = process.env
     hebcalApiBase: (env.HEBCAL_API_BASE || 'https://www.hebcal.com').replace(/\/+$/, ''),
     hebcalRefreshHours: Number(env.HEBCAL_REFRESH_HOURS || 12),
     logLevel: env.LOG_LEVEL || 'info',
+    appAdminAccess: env.APP_ADMIN_ACCESS === 'metadata' ? 'metadata' : 'full',
+    clientIpHeader: (env.CLIENT_IP_HEADER || '').trim().toLowerCase(),
   };
 }
 

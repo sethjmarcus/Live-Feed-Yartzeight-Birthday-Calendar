@@ -8,7 +8,7 @@ import { useToast } from '../components/Layout';
 import { applyServerErrors } from '../forms';
 import { Field, FormError } from '../components/ui';
 import { accountSchema } from '../../../shared/schemas';
-import { PERMISSIONS, presetName } from '../../../shared/permissions';
+import { PERMISSIONS, roleName } from '../../../shared/permissions';
 
 export function AccountPage() {
   const { user } = useSession();
@@ -31,11 +31,25 @@ export function AccountPage() {
     } catch (err) { setError(applyServerErrors(err, form.setError)); }
   });
 
+  const signOutOthers = async () => {
+    if (!confirm('Sign out everywhere except this browser?')) return;
+    await api.post('/api/me/sign-out-others');
+    await refresh();
+    toast({ type: 'ok', msg: 'Signed out on all other devices.' });
+  };
+
   return (
     <section className="card narrow-page">
       <h1>Your account</h1>
-      <p>Signed in as <strong>{user!.username}</strong>. Access level: <strong>{presetName(user!.permissions)}</strong></p>
-      <p className="small muted">Permissions: {PERMISSIONS.filter(p => user!.permissions.includes(p.key)).map(p => p.label).join(', ') || 'none'}</p>
+      <p>Signed in as <strong>{user!.username}</strong>.{user!.appAdmin && <> You're an <span className="badge">App admin</span>.</>}</p>
+      {user!.memberships.length ? (
+        <ul className="cal-list small">
+          {user!.memberships.map(m => (
+            <li key={m.calendarId}><strong>{m.calendarName}</strong>: {roleName(m.permissions)}{' '}
+              <span className="muted">({PERMISSIONS.filter(p => m.permissions.includes(p.key)).map(p => p.label).join(', ')})</span></li>
+          ))}
+        </ul>
+      ) : <p className="small muted">You aren't in any calendar yet.</p>}
       <FormError message={error} />
       <form onSubmit={onSubmit} className="stack" noValidate>
         <Field label="Display name" error={errors.displayName?.message}><input {...register('displayName')} /></Field>
@@ -43,6 +57,10 @@ export function AccountPage() {
         <Field label="New password" hint="(leave blank to keep)" error={errors.newPassword?.message}><input type="password" {...register('newPassword')} autoComplete="new-password" /></Field>
         <button className="btn primary" disabled={isSubmitting}>Save</button>
       </form>
+      <div className="danger-zone">
+        <button type="button" className="btn" onClick={signOutOthers}>Sign out on all other devices</button>
+        <p className="small muted">For a lost phone or a shared computer. This browser stays signed in. Calendar feeds on phones keep working.</p>
+      </div>
     </section>
   );
 }

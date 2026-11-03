@@ -8,10 +8,12 @@ import { EventRepository } from '../features/events/eventRepository.js';
 import { AuditRepository } from '../features/audit/auditRepository.js';
 import { SettingsRepository } from '../features/settings/settingsRepository.js';
 import { HebcalCacheRepository } from '../features/hebcal/hebcalCacheRepository.js';
+import { CalendarRepository } from '../features/calendars/calendarRepository.js';
 import type { TokenVault } from '../lib/tokens.js';
 
 export interface Repositories {
   users: UserRepository;
+  calendars: CalendarRepository;
   events: EventRepository;
   audit: AuditRepository;
   settings: SettingsRepository;
@@ -21,6 +23,7 @@ export interface Repositories {
 function repositories(ex: Executor, vault: TokenVault): Repositories {
   return {
     users: new UserRepository(ex, vault),
+    calendars: new CalendarRepository(ex),
     events: new EventRepository(ex),
     audit: new AuditRepository(ex),
     settings: new SettingsRepository(ex),
@@ -32,12 +35,17 @@ export class UnitOfWork {
   /** Repositories for reads and single-statement writes. */
   readonly repos: Repositories;
 
+  /** Goes up after every committed change — lets caches (feeds) know they're stale. */
+  version = 0;
+
   constructor(private db: Database, private vault: TokenVault) {
     this.repos = repositories(db, vault);
   }
 
   /** Run fn in a transaction; everything commits together or not at all. */
-  transaction<T>(fn: (repos: Repositories) => Promise<T>): Promise<T> {
-    return this.db.transaction().execute(trx => fn(repositories(trx, this.vault)));
+  async transaction<T>(fn: (repos: Repositories) => Promise<T>): Promise<T> {
+    const result = await this.db.transaction().execute(trx => fn(repositories(trx, this.vault)));
+    this.version += 1;
+    return result;
   }
 }

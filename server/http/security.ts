@@ -13,7 +13,7 @@ import { doubleCsrf } from 'csrf-csrf';
 import { rateLimit } from 'express-rate-limit';
 import type { Config } from '../config.js';
 
-export const SESSION_DAYS = 90;
+import { IDLE_DAYS } from './sessions.js';
 
 declare global {
   // eslint-disable-next-line @typescript-eslint/no-namespace
@@ -21,10 +21,10 @@ declare global {
     interface CookieSessionObject {
       /** Random per-browser id; the CSRF token is bound to it. */
       sid?: string;
-      /** Signed-in user id. */
-      uid?: number;
-      /** User's sessionVersion when they signed in — bumping it signs out every device. */
-      sv?: number;
+      /** Random token of the server-side session (see sessions.ts). */
+      tok?: string;
+      /** Last time the cookie was refreshed (ms). */
+      seen?: number;
     }
   }
 }
@@ -42,6 +42,14 @@ export function loadSecret(dataDir: string): string {
 export function installSecurity(app: Express, config: Config, secret: string) {
   const https = config.publicUrl.startsWith('https://');
   app.set('trust proxy', config.trustProxy);
+  if (config.clientIpHeader) {
+    // Behind Cloudflare: its header holds exactly one address, the real visitor's.
+    app.use((req, _res, next) => {
+      const ip = req.get(config.clientIpHeader)?.trim();
+      if (ip) Object.defineProperty(req, 'ip', { value: ip, configurable: true });
+      next();
+    });
+  }
 
   app.use(helmet({
     // Vite's dev server injects inline scripts, so CSP is enforced only for the built app.
@@ -58,7 +66,7 @@ export function installSecurity(app: Express, config: Config, secret: string) {
   app.use(cookieSession({
     name: 'feedcal',
     keys: [secret],
-    maxAge: SESSION_DAYS * 86_400_000,
+    maxAge: IDLE_DAYS * 86_400_000,
     sameSite: 'lax',
     httpOnly: true,
     secure: https,
@@ -81,6 +89,21 @@ export function createCsrf(secret: string, config: Config) {
     cookieName: https ? '__Host-feedcal.csrf' : 'feedcal.csrf',
     cookieOptions: { sameSite: 'lax', secure: https, httpOnly: true, path: '/' },
     getCsrfTokenFromRequest: req => req.headers['x-csrf-token'] as string | undefined,
+  });
+}
+
+/**
+ * A ceiling for everything else, per address: generous for people and phones, but one
+ * misbehaving client or script can't keep the server busy. (Real DDoS protection needs
+ * something in front of the server, such as Cloudflare.)
+ */
+export function createRateLimit(perMinute: number): RequestHandler {
+  return rateLimit({
+    windowMs: 60_000,
+    limit: perMinute,
+    standardHeaders: 'draft-8',
+    legacyHeaders: false,
+    message: { error: 'Too many requests. Please wait a minute and try again.' },
   });
 }
 

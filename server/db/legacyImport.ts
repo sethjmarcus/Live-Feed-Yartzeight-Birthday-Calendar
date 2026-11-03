@@ -24,17 +24,23 @@ export async function importLegacyJson(uow: UnitOfWork, dataDir: string, log: { 
   const legacy = JSON.parse(fs.readFileSync(file, 'utf8')) as LegacyDb;
   await uow.transaction(async r => {
     const { calendarName, yearsAhead, yearsBehind } = legacy.settings ?? {};
-    await r.settings.save({ calendarName, yearsAhead, yearsBehind });
+    const name = calendarName || 'Family Calendar';
+    await r.settings.save({ siteName: name, yearsAhead, yearsBehind });
+
+    // Version 1 had one calendar; people keep their permissions in it ("admin" → manage + app admin).
+    const perms = (u: { perms?: Record<string, boolean> }) => PERMISSION_KEYS.filter(k => k === 'manage' ? u.perms?.admin : u.perms?.[k]) as Permission[];
+    const firstAdmin = (legacy.users ?? []).find(u => u.perms?.admin);
+    const pending: { userId: number; permissions: Permission[]; addedAt: string }[] = [];
 
     for (const u of legacy.users ?? []) {
-      await r.users.create({
+      const created = await r.users.create({
         id: u.id as number,
         username: u.username as string,
         displayName: u.displayName as string,
         passwordHash: (u.passwordHash as string) ?? null,
         sessionVersion: (u.sessionVersion as number) ?? 0,
         active: u.active !== false,
-        permissions: PERMISSION_KEYS.filter(k => u.perms?.[k]) as Permission[],
+        appAdmin: !!u.perms?.admin,
         feedToken: u.feedToken as string,
         feedPrefs: {
           types: (u.feedPrefs?.types?.length ? u.feedPrefs.types : [...EVENT_TYPE_KEYS]) as never,
@@ -47,10 +53,15 @@ export async function importLegacyJson(uow: UnitOfWork, dataDir: string, log: { 
         lastFeedFetch: (u.lastFeedFetch as string) ?? null,
         lastFeedAgent: (u.lastFeedAgent as string) ?? null,
       });
+      if (perms(u).length) pending.push({ userId: created.id, permissions: perms(u), addedAt: created.createdAt });
     }
+    const calendar = await r.calendars.create({ name, createdAt: new Date().toISOString(), createdBy: (firstAdmin?.id as number) ?? null });
+    for (const m of pending) await r.calendars.addMember({ ...m, calendarId: calendar.id, inFeed: true, addedBy: null });
+
     for (const e of legacy.events ?? []) {
       await r.events.create({
         id: e.id as number,
+        calendarId: calendar.id,
         type: e.type as never,
         name: (e.name as string) || '', title: (e.title as string) || '',
         hebrewName: (e.hebrewName as string) || '', notes: (e.notes as string) || '',
@@ -65,6 +76,7 @@ export async function importLegacyJson(uow: UnitOfWork, dataDir: string, log: { 
     for (const a of legacy.audit ?? []) {
       await r.audit.add({
         at: a.at as string, actorId: (a.actorId as number) ?? null, action: a.action as string,
+        calendarId: a.eventId ? calendar.id : null,
         eventId: (a.eventId as number) ?? null, targetUserId: (a.targetUserId as number) ?? null,
         label: (a.label as string) ?? null, changes: (a.changes as never) ?? null, snapshot: a.snapshot ?? null,
       });

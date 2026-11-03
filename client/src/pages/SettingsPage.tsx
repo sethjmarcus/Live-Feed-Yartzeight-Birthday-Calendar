@@ -67,7 +67,8 @@ function SettingsForm({ data }: { data: SettingsDTO }) {
           <h1>Settings</h1>
           <FormError message={error} />
           <div className="stack">
-            <Field label="Calendar name" hint="(shown on phones)" error={errors.calendarName?.message}><input {...register('calendarName')} /></Field>
+            <Field label="Site name" hint="(top of every page; name of feeds that combine several calendars)" error={errors.siteName?.message}><input {...register('siteName')} /></Field>
+            <p className="small muted">Calendar names are set on the <a href="/calendars">Calendars</a> page.</p>
             <div className="row">
               <Field label="Years ahead in feed" error={errors.yearsAhead?.message}><input type="number" min={1} max={30} {...register('yearsAhead')} /></Field>
               <Field label="Years of history" error={errors.yearsBehind?.message}><input type="number" min={0} max={10} {...register('yearsBehind')} /></Field>

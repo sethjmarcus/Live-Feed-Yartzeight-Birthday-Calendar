@@ -19,8 +19,12 @@ const username = z.string().trim().toLowerCase()
   .transform(s => s.replace(/\s+/g, '.'))
   .pipe(z.string().regex(/^[a-z0-9._@-]{2,60}$/, 'Letters, numbers, dots or dashes (2–60 characters).'));
 
+/** An id from a <select>: '' or 0 means "nothing chosen". */
+const idField = (message: string) => z.coerce.number({ message }).int().positive(message);
+
 // ---------------------------------------------------------------- events
 export const eventInputSchema = z.object({
+  calendarId: idField('Choose a calendar.'),
   type: z.enum(EVENT_TYPE_KEYS),
   name: text(200).default(''),
   title: text(200).default(''),
@@ -47,7 +51,7 @@ export type EventInput = z.input<typeof eventInputSchema>;
 export type ValidEventInput = z.output<typeof eventInputSchema>;
 
 /** Fill in the other calendar: the stored event always has both dates. */
-export function normalizeEvent(v: ValidEventInput): EventCore & { dateEntry: 'gregorian' | 'hebrew' } {
+export function normalizeEvent(v: ValidEventInput): EventCore & { calendarId: number; dateEntry: 'gregorian' | 'hebrew' } {
   let gDate: string;
   let h: HebrewDate;
   if (v.dateEntry === 'gregorian') {
@@ -58,6 +62,7 @@ export function normalizeEvent(v: ValidEventInput): EventCore & { dateEntry: 'gr
     gDate = isoFromHebrew(h);
   }
   return {
+    calendarId: v.calendarId,
     type: v.type as EventType,
     name: v.type === 'other' ? '' : v.name,
     title: v.type === 'other' ? v.title : '',
@@ -97,18 +102,41 @@ export const feedPrefsSchema = z.object({
 });
 export type FeedPrefs = z.infer<typeof feedPrefsSchema>;
 
-// ---------------------------------------------------------------- admin
+/** The Subscribe page's form: feed preferences plus which calendars go into the feed. */
+export const feedSettingsSchema = feedPrefsSchema.extend({
+  calendars: z.array(z.coerce.number().int()).optional(),
+});
+export type FeedSettings = z.infer<typeof feedSettingsSchema>;
+
+// ---------------------------------------------------------------- calendars & people
+const permissionList = z.array(z.enum(PERMISSION_KEYS)).min(1, 'Choose at least one permission.');
+
+export const calendarSchema = z.object({
+  name: text(100).min(1, 'Enter a name for the calendar.'),
+});
+
+export const memberSchema = z.object({ permissions: permissionList });
+
+/** Create an account and add it to one calendar (more can be added later). */
 export const userInviteSchema = z.object({
   displayName: text(100).min(1, 'Enter a name.'),
   username,
-  permissions: z.array(z.enum(PERMISSION_KEYS)),
+  calendarId: idField('Choose a calendar.'),
+  permissions: permissionList,
 });
-export const userUpdateSchema = userInviteSchema.extend({ active: z.boolean() });
+
+export const userUpdateSchema = z.object({
+  displayName: text(100).min(1, 'Enter a name.'),
+  username,
+  active: z.boolean(),
+  appAdmin: z.boolean(),
+});
 
 export const HOLIDAY_GROUP_KEYS = ['major', 'minor', 'modern', 'roshchodesh', 'fast', 'specialShabbat'] as const;
 
 export const settingsSchema = z.object({
-  calendarName: text(100).min(1, 'Enter a calendar name.'),
+  /** Shown at the top of every page, and as the name of feeds that combine several calendars. */
+  siteName: text(100).min(1, 'Enter a name.'),
   yearsAhead: z.coerce.number().int().min(1).max(30),
   yearsBehind: z.coerce.number().int().min(0).max(10),
   hebcalGeonameId: z.string().trim().regex(/^\d*$/, 'A GeoNames ID is a number, e.g. 281184 for Jerusalem.'),
@@ -119,7 +147,7 @@ export const settingsSchema = z.object({
 export type Settings = z.infer<typeof settingsSchema>;
 
 export const DEFAULT_SETTINGS: Settings = {
-  calendarName: 'Family Calendar',
+  siteName: 'Family Calendar',
   yearsAhead: 10,
   yearsBehind: 1,
   hebcalGeonameId: '',
@@ -127,6 +155,22 @@ export const DEFAULT_SETTINGS: Settings = {
   hebcalCandleMinutes: 18,
   hebcalHolidays: ['major', 'minor', 'modern', 'roshchodesh', 'fast'],
 };
+
+// ---------------------------------------------------------------- query strings
+// Each value is a single string (a repeated ?a=1&a=2 is rejected), and unknown ones are dropped.
+const qId = z.string().regex(/^\d{1,9}$/, 'Invalid id.').optional();
+const qText = z.string().max(200).optional();
+
+export const eventsQuerySchema = z.object({
+  calendar: qId, by: qId, q: qText,
+  type: z.union([z.enum(EVENT_TYPE_KEYS), z.literal('')]).optional(),
+  deleted: z.enum(['1', '']).optional(),
+});
+export const upcomingQuerySchema = z.object({ calendar: qId, days: z.string().regex(/^\d{1,4}$/).optional() });
+export const activityQuerySchema = z.object({
+  calendar: qId, user: qId, page: z.string().regex(/^\d{1,6}$/).optional(),
+  kind: z.enum(['', 'event', 'user']).optional(),
+});
 
 /** Field → message map for showing validation errors next to inputs. */
 export function fieldErrors(error: z.ZodError): Record<string, string> {

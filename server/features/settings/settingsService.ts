@@ -5,10 +5,10 @@ import fs from 'node:fs';
 import path from 'node:path';
 import type SQLite from 'better-sqlite3';
 import type { UnitOfWork } from '../../db/unitOfWork.js';
-import type { User } from '../users/userRepository.js';
+import type { Actor } from '../users/userRepository.js';
 import type { HebcalGateway } from '../hebcal/hebcalGateway.js';
 import { backupTo } from '../../db/database.js';
-import { can } from '../../../shared/permissions.js';
+import { calendarsWhere, isAppAdmin } from '../../../shared/permissions.js';
 import type { Settings } from '../../../shared/schemas.js';
 import { ForbiddenError } from '../../http/errors.js';
 import { diff, nowIso } from '../../lib/util.js';
@@ -31,7 +31,7 @@ export class SettingsService {
 
   get() { return this.uow.repos.settings.get(); }
 
-  async update(actor: User, next: Settings) {
+  async update(actor: Actor, next: Settings) {
     requireAdmin(actor);
     const current = await this.get();
     const changes = diff(current, next, Object.keys(next) as (keyof Settings)[]);
@@ -44,17 +44,24 @@ export class SettingsService {
     return true;
   }
 
-  async activity(actor: User, q: { user?: string; kind?: string; page?: string }) {
-    requireAdmin(actor);
+  /**
+   * The activity log: entries of the calendars the actor manages, plus site-wide entries
+   * (accounts, settings) for app admins. Optionally narrowed to one calendar or person.
+   */
+  async activity(actor: Actor, q: { calendar?: string; user?: string; kind?: string; page?: string }) {
+    let calendarIds = calendarsWhere(actor, 'manage').map(c => c.id);
+    if (!calendarIds.length && !isAppAdmin(actor)) throw new ForbiddenError();
+    if (q.calendar) calendarIds = calendarIds.filter(id => id === Number(q.calendar));
     const page = Math.max(1, Number(q.page) || 1);
     const { entries, total } = await this.uow.repos.audit.page({
+      calendarIds, siteWide: isAppAdmin(actor) && !q.calendar,
       userId: q.user ? Number(q.user) : null, kind: q.kind, limit: PER_PAGE, offset: (page - 1) * PER_PAGE,
     });
     return { entries, page, pages: Math.max(1, Math.ceil(total / PER_PAGE)) };
   }
 
   /** A fresh backup file for download; caller deletes it after sending. */
-  async backupNow(actor: User): Promise<string> {
+  async backupNow(actor: Actor): Promise<string> {
     requireAdmin(actor);
     const file = path.join(this.backupDir, `manual-${nowIso().replace(/[:.]/g, '-')}.sqlite`);
     await backupTo(this.sqlite, file);
@@ -74,6 +81,6 @@ export class SettingsService {
   }
 }
 
-function requireAdmin(actor: User) {
-  if (!can(actor, 'admin')) throw new ForbiddenError();
+function requireAdmin(actor: Actor) {
+  if (!isAppAdmin(actor)) throw new ForbiddenError();
 }
